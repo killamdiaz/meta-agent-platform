@@ -66,6 +66,91 @@ export class AgentManager {
     return rows[0];
   }
 
+  async updateAgent(
+    id: string,
+    updates: {
+      name?: string;
+      role?: string;
+      tools?: Record<string, unknown> | string;
+      objectives?: unknown;
+      memory_context?: string;
+      status?: string;
+    }
+  ) {
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      assignments.push(`name = $${assignments.length + 1}`);
+      values.push(updates.name);
+    }
+
+    if (updates.role !== undefined) {
+      assignments.push(`role = $${assignments.length + 1}`);
+      values.push(updates.role);
+    }
+
+    if (updates.tools !== undefined) {
+      let toolsJson: string;
+      if (typeof updates.tools === 'string') {
+        try {
+          JSON.parse(updates.tools);
+          toolsJson = updates.tools;
+        } catch {
+          toolsJson = JSON.stringify({});
+        }
+      } else {
+        toolsJson = JSON.stringify(updates.tools ?? {});
+      }
+      assignments.push(`tools = $${assignments.length + 1}::jsonb`);
+      values.push(toolsJson);
+    }
+
+    if (updates.objectives !== undefined) {
+      let objectivesJson: string;
+      if (updates.objectives === null) {
+        objectivesJson = JSON.stringify([]);
+      } else if (typeof updates.objectives === 'string') {
+        try {
+          const parsed = JSON.parse(updates.objectives);
+          objectivesJson = JSON.stringify(parsed);
+        } catch {
+          objectivesJson = JSON.stringify([updates.objectives]);
+        }
+      } else {
+        objectivesJson = JSON.stringify(updates.objectives);
+      }
+      assignments.push(`objectives = $${assignments.length + 1}::jsonb`);
+      values.push(objectivesJson);
+    }
+
+    if (updates.memory_context !== undefined) {
+      assignments.push(`memory_context = $${assignments.length + 1}`);
+      values.push(updates.memory_context);
+    }
+
+    if (updates.status !== undefined) {
+      assignments.push(`status = $${assignments.length + 1}`);
+      values.push(updates.status);
+    }
+
+    if (assignments.length === 0) {
+      return this.getAgent(id);
+    }
+
+    const query = `
+      UPDATE agents
+         SET ${assignments.join(', ')}, updated_at = NOW()
+       WHERE id = $${assignments.length + 1}
+       RETURNING *`;
+    const { rows } = await pool.query<AgentRecord>(query, [...values, id]);
+    return rows[0] ?? null;
+  }
+
+  async deleteAgent(id: string) {
+    await pool.query('DELETE FROM agents WHERE id = $1', [id]);
+  }
+
   async addTask(agentId: string, prompt: string) {
     const { rows } = await pool.query<TaskRecord>(
       `INSERT INTO tasks(agent_id, prompt)

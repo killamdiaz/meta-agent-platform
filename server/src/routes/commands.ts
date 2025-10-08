@@ -12,7 +12,65 @@ const commandSchema = z.object({
 router.post('/', async (req, res, next) => {
   try {
     const { input } = commandSchema.parse(req.body);
-    const tokens = input.trim().split(/\s+/);
+    const trimmed = input.trim();
+    if (!trimmed) {
+      res.status(400).json({ message: 'Invalid command' });
+      return;
+    }
+
+    const agents = await agentManager.allAgents();
+
+    const findAgent = (identifier: string): AgentRecord | undefined => {
+      const lowered = identifier.toLowerCase();
+      return (
+        agents.find((agent) => agent.id === identifier) ||
+        agents.find((agent) => agent.name.toLowerCase() === lowered)
+      );
+    };
+
+    const autoRoute = (text: string): AgentRecord | undefined => {
+      const lowered = text.toLowerCase();
+      return (
+        agents.find((agent) => lowered.includes(agent.name.toLowerCase())) ||
+        agents.find((agent) => agent.role && lowered.includes(agent.role.toLowerCase())) ||
+        agents[0]
+      );
+    };
+
+    const enqueue = async (agent: AgentRecord, prompt: string) => {
+      const task = await agentManager.addTask(agent.id, prompt);
+      res.json({ message: 'Task enqueued', agent, task });
+    };
+
+    if (!trimmed.startsWith('/')) {
+      if (trimmed.startsWith('@')) {
+        const mentionBody = trimmed.slice(1);
+        const [identifier, ...rest] = mentionBody.split(/\s+/);
+        const agent = identifier ? findAgent(identifier) : undefined;
+        if (!agent) {
+          res.status(404).json({ message: `Agent ${identifier || ''} not found` });
+          return;
+        }
+        const remainder = rest.join(' ').trim();
+        await enqueue(agent, remainder || `Run command for ${agent.name}`);
+        return;
+      }
+
+      if (agents.length === 0) {
+        res.status(404).json({ message: 'No agents available to process this command' });
+        return;
+      }
+
+      const agent = autoRoute(trimmed);
+      if (!agent) {
+        res.status(404).json({ message: 'No matching agent found for the request' });
+        return;
+      }
+      await enqueue(agent, trimmed);
+      return;
+    }
+
+    const tokens = trimmed.split(/\s+/);
     const action = tokens.shift()?.toLowerCase();
     if (!action) {
       res.status(400).json({ message: 'Invalid command' });
@@ -87,21 +145,20 @@ router.post('/', async (req, res, next) => {
         break;
       }
       case '/run': {
-        const agentName = tokens.shift();
-        if (!agentName) {
-          res.status(400).json({ message: 'Agent name required' });
+        const identifier = tokens.shift();
+        if (!identifier) {
+          res.status(400).json({ message: 'Agent identifier required' });
           return;
         }
-        const agents = await agentManager.allAgents();
-        const agent = agents.find((a: AgentRecord) => a.name.toLowerCase() === agentName.toLowerCase());
+        const agent = findAgent(identifier);
         if (!agent) {
-          res.status(404).json({ message: `Agent ${agentName} not found` });
+          res.status(404).json({ message: `Agent ${identifier} not found` });
           return;
         }
-        const quoteIndex = input.indexOf('"');
-        const prompt = quoteIndex >= 0 ? input.substring(quoteIndex).replace(/^"|"$/g, '') : tokens.join(' ');
+        const quoteIndex = trimmed.indexOf('"');
+        const prompt = quoteIndex >= 0 ? trimmed.substring(quoteIndex).replace(/^"|"$/g, '') : tokens.join(' ');
         const task = await agentManager.addTask(agent.id, prompt || `Run command for ${agent.name}`);
-        res.json({ message: 'Task enqueued', task });
+        res.json({ message: 'Task enqueued', agent, task });
         break;
       }
       default: {
