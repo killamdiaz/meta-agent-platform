@@ -1,0 +1,3 @@
+[submodule "meta-agent-platform-ui"]
+	path = meta-agent-platform-ui
+	url = https://github.com/killamdiaz/meta-agent-platform-ui.git

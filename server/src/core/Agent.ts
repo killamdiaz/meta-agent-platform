@@ -60,7 +60,6 @@ export class Agent {
     const response = await openai.chat.completions.create({
       model: 'gpt-5',
       messages,
-      temperature: 0.3
     });
     const content = response.choices[0]?.message?.content ?? '';
     return content.trim();

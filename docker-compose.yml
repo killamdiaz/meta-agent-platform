@@ -2,7 +2,8 @@ version: "3.9"
 
 services:
   db:
-    image: postgres:15
+    image: ankane/pgvector:latest
+
     restart: unless-stopped
     env_file:
       - .env
