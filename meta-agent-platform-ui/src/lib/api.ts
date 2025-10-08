@@ -11,13 +11,14 @@ import type {
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const { headers, ...rest } = options;
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(headers ?? {}),
     },
-    credentials: 'include',
-    ...options,
+    ...rest,
   });
 
   if (!response.ok) {
