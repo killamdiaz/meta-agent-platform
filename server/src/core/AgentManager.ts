@@ -27,15 +27,41 @@ export class AgentManager {
   async createAgent(payload: {
     name: string;
     role: string;
-    tools: Record<string, unknown>;
+    tools: Record<string, unknown> | string;
     objectives: unknown;
     memory_context?: string;
   }) {
+    let toolsJson: string;
+    if (typeof payload.tools === 'string') {
+      try {
+        JSON.parse(payload.tools);
+        toolsJson = payload.tools;
+      } catch {
+        toolsJson = JSON.stringify({});
+      }
+    } else {
+      toolsJson = JSON.stringify(payload.tools ?? {});
+    }
+
+    let objectivesJson: string;
+    if (payload.objectives === undefined || payload.objectives === null) {
+      objectivesJson = JSON.stringify([]);
+    } else if (typeof payload.objectives === 'string') {
+      try {
+        const parsed = JSON.parse(payload.objectives);
+        objectivesJson = JSON.stringify(parsed);
+      } catch {
+        objectivesJson = JSON.stringify([payload.objectives]);
+      }
+    } else {
+      objectivesJson = JSON.stringify(payload.objectives);
+    }
+
     const { rows } = await pool.query<AgentRecord>(
       `INSERT INTO agents(name, role, tools, objectives, memory_context)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [payload.name, payload.role, payload.tools, payload.objectives, payload.memory_context ?? '']
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+        RETURNING *`,
+      [payload.name, payload.role, toolsJson, objectivesJson, payload.memory_context ?? '']
     );
     return rows[0];
   }
