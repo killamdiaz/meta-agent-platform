@@ -3,6 +3,7 @@ __pycache__/
 .env
 node_modules/
 server/dist/
+meta-agent-platform-ui/dist/
 .data/
 .data-*/
 .data

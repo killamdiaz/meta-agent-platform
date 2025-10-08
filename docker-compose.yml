@@ -31,18 +31,19 @@ services:
       - "4000:4000"
 
   frontend:
-    build: ./frontend
-    command: npm start
+    build: ./meta-agent-platform-ui
+    command: npm run dev -- --host 0.0.0.0 --port 8080
     depends_on:
       - server
     environment:
       - CHOKIDAR_USEPOLLING=true
       - BROWSER=none
+      - VITE_API_BASE_URL=http://server:4000
     volumes:
-      - ./frontend:/app
+      - ./meta-agent-platform-ui:/app
       - /app/node_modules
     ports:
-      - "3000:3000"
+      - "3000:8080"
 
   nginx:
     image: nginx:alpine

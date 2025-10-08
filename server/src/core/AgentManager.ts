@@ -27,17 +27,128 @@ export class AgentManager {
   async createAgent(payload: {
     name: string;
     role: string;
-    tools: Record<string, unknown>;
+    tools: Record<string, unknown> | string;
     objectives: unknown;
     memory_context?: string;
   }) {
+    let toolsJson: string;
+    if (typeof payload.tools === 'string') {
+      try {
+        JSON.parse(payload.tools);
+        toolsJson = payload.tools;
+      } catch {
+        toolsJson = JSON.stringify({});
+      }
+    } else {
+      toolsJson = JSON.stringify(payload.tools ?? {});
+    }
+
+    let objectivesJson: string;
+    if (payload.objectives === undefined || payload.objectives === null) {
+      objectivesJson = JSON.stringify([]);
+    } else if (typeof payload.objectives === 'string') {
+      try {
+        const parsed = JSON.parse(payload.objectives);
+        objectivesJson = JSON.stringify(parsed);
+      } catch {
+        objectivesJson = JSON.stringify([payload.objectives]);
+      }
+    } else {
+      objectivesJson = JSON.stringify(payload.objectives);
+    }
+
     const { rows } = await pool.query<AgentRecord>(
       `INSERT INTO agents(name, role, tools, objectives, memory_context)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [payload.name, payload.role, payload.tools, payload.objectives, payload.memory_context ?? '']
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+        RETURNING *`,
+      [payload.name, payload.role, toolsJson, objectivesJson, payload.memory_context ?? '']
     );
     return rows[0];
+  }
+
+  async updateAgent(
+    id: string,
+    updates: {
+      name?: string;
+      role?: string;
+      tools?: Record<string, unknown> | string;
+      objectives?: unknown;
+      memory_context?: string;
+      status?: string;
+    }
+  ) {
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      assignments.push(`name = $${assignments.length + 1}`);
+      values.push(updates.name);
+    }
+
+    if (updates.role !== undefined) {
+      assignments.push(`role = $${assignments.length + 1}`);
+      values.push(updates.role);
+    }
+
+    if (updates.tools !== undefined) {
+      let toolsJson: string;
+      if (typeof updates.tools === 'string') {
+        try {
+          JSON.parse(updates.tools);
+          toolsJson = updates.tools;
+        } catch {
+          toolsJson = JSON.stringify({});
+        }
+      } else {
+        toolsJson = JSON.stringify(updates.tools ?? {});
+      }
+      assignments.push(`tools = $${assignments.length + 1}::jsonb`);
+      values.push(toolsJson);
+    }
+
+    if (updates.objectives !== undefined) {
+      let objectivesJson: string;
+      if (updates.objectives === null) {
+        objectivesJson = JSON.stringify([]);
+      } else if (typeof updates.objectives === 'string') {
+        try {
+          const parsed = JSON.parse(updates.objectives);
+          objectivesJson = JSON.stringify(parsed);
+        } catch {
+          objectivesJson = JSON.stringify([updates.objectives]);
+        }
+      } else {
+        objectivesJson = JSON.stringify(updates.objectives);
+      }
+      assignments.push(`objectives = $${assignments.length + 1}::jsonb`);
+      values.push(objectivesJson);
+    }
+
+    if (updates.memory_context !== undefined) {
+      assignments.push(`memory_context = $${assignments.length + 1}`);
+      values.push(updates.memory_context);
+    }
+
+    if (updates.status !== undefined) {
+      assignments.push(`status = $${assignments.length + 1}`);
+      values.push(updates.status);
+    }
+
+    if (assignments.length === 0) {
+      return this.getAgent(id);
+    }
+
+    const query = `
+      UPDATE agents
+         SET ${assignments.join(', ')}, updated_at = NOW()
+       WHERE id = $${assignments.length + 1}
+       RETURNING *`;
+    const { rows } = await pool.query<AgentRecord>(query, [...values, id]);
+    return rows[0] ?? null;
+  }
+
+  async deleteAgent(id: string) {
+    await pool.query('DELETE FROM agents WHERE id = $1', [id]);
   }
 
   async addTask(agentId: string, prompt: string) {
