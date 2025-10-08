@@ -1,4 +1,4 @@
-import type { CommandResponse } from '../types';
+import type { BuildAgentResult, CommandResponse, GeneratedAgentSpec } from '../types';
 
 const API_BASE = process.env.VITE_API_BASE || process.env.REACT_APP_API_BASE || 'http://localhost:4000';
 
@@ -53,6 +53,23 @@ export const api = {
     return request<CommandResponse>('/commands', {
       method: 'POST',
       body: JSON.stringify({ input })
+    });
+  },
+  async buildAgentFromPrompt(payload: {
+    promptText: string;
+    persist?: boolean;
+    spawn?: boolean;
+    creator?: string;
+  }) {
+    return request<BuildAgentResult>('/agent-builder', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+  async previewAgentSpec(payload: { promptText: string; creator?: string }) {
+    return request<{ spec: GeneratedAgentSpec }>('/agent-builder/spec', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     });
   }
 };
