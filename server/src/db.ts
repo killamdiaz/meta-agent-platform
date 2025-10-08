@@ -1,5 +1,8 @@
-import { Pool } from 'pg';
+import pg from 'pg';
 import { config } from './config.js';
+
+const { Pool } = pg;
+type PoolClient = pg.PoolClient;
 
 export const pool = new Pool({
   connectionString: config.databaseUrl
@@ -45,7 +48,7 @@ export async function initDb() {
   `);
 }
 
-export async function withTransaction<T>(fn: (client: import('pg').PoolClient) => Promise<T>) {
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
