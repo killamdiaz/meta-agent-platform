@@ -8,16 +8,46 @@ import type {
   TaskRecord,
 } from '@/types/api';
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
+const API_BASE = (() => {
+  const configured = import.meta.env.VITE_API_BASE_URL;
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const normalize = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
+
+  if (typeof window !== 'undefined') {
+    if (configured) {
+      try {
+        const url = new URL(configured, window.location.origin);
+        if (url.hostname === 'server' && window.location.hostname !== 'server') {
+          url.hostname = window.location.hostname;
+        }
+
+        return normalize(url.toString());
+      } catch (error) {
+        console.warn('Invalid VITE_API_BASE_URL, using as-is', error);
+        return normalize(configured);
+      }
+    }
+
+    if (import.meta.env.DEV) {
+      return normalize(
+        `${window.location.protocol}//${window.location.hostname || 'localhost'}:4000`,
+      );
+    }
+
+    return '';
+  }
+
+  return configured ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
+})();
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const { headers, ...rest } = options;
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(headers ?? {}),
     },
-    credentials: 'include',
-    ...options,
+    ...rest,
   });
 
   if (!response.ok) {

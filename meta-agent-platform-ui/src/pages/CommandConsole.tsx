@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Mic, Sparkles, Loader2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { AgentRecord, CommandResponse } from "@/types/api";
+import type { AgentRecord, CommandResponse, MemoryEntry, TaskRecord } from "@/types/api";
 import { useToast } from "@/components/ui/use-toast";
 
 type MessageRole = "user" | "assistant" | "system";
@@ -11,6 +11,9 @@ type MessageRole = "user" | "assistant" | "system";
 interface Message {
   role: MessageRole;
   content: string;
+  agentId?: string;
+  taskId?: string;
+  kind?: "context" | "memory" | "status" | "message";
 }
 
 function findAgentByIdentifier(agents: AgentRecord[], identifier: string) {
@@ -21,13 +24,93 @@ function findAgentByIdentifier(agents: AgentRecord[], identifier: string) {
   );
 }
 
-function autoSelectAgent(agents: AgentRecord[], text: string) {
+function extractObjectives(objectives: AgentRecord["objectives"]): string[] {
+  if (Array.isArray(objectives)) {
+    return objectives.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  }
+
+  if (typeof objectives === "string") {
+    try {
+      const parsed = JSON.parse(objectives);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      }
+    } catch {
+      if (objectives.trim().length > 0) {
+        return [objectives.trim()];
+      }
+    }
+  }
+
+  return [];
+}
+
+function scoreAgentForText(agent: AgentRecord, text: string) {
   const lowered = text.toLowerCase();
-  return (
-    agents.find((agent) => lowered.includes(agent.name.toLowerCase())) ||
-    agents.find((agent) => lowered.includes(agent.role.toLowerCase())) ||
-    agents[0]
-  );
+  let score = 0;
+
+  const name = agent.name.toLowerCase();
+  if (lowered.includes(name)) {
+    score += 6;
+  }
+
+  if (agent.role) {
+    const role = agent.role.toLowerCase();
+    if (lowered.includes(role)) {
+      score += 4;
+    }
+  }
+
+  const objectives = extractObjectives(agent.objectives);
+  objectives.forEach((objective) => {
+    const objectiveLower = objective.toLowerCase();
+    if (lowered.includes(objectiveLower)) {
+      score += 2.5;
+    } else {
+      const keywords = objectiveLower.split(/[^\w]+/).filter((keyword) => keyword.length > 3);
+      const matches = keywords.filter((keyword) => lowered.includes(keyword));
+      if (matches.length > 0) {
+        score += matches.length * 1.2;
+      }
+    }
+  });
+
+  if (agent.memory_context) {
+    const memoryKeywords = agent.memory_context
+      .toLowerCase()
+      .split(/[^\w]+/)
+      .filter((keyword) => keyword.length > 4);
+    const matches = memoryKeywords.filter((keyword) => lowered.includes(keyword));
+    if (matches.length > 0) {
+      score += matches.length * 0.8;
+    }
+  }
+
+  const tools = Object.keys(agent.tools ?? {});
+  tools.forEach((tool) => {
+    if (lowered.includes(tool.toLowerCase())) {
+      score += 1.5;
+    }
+  });
+
+  return score;
+}
+
+function autoSelectAgent(agents: AgentRecord[], text: string) {
+  if (agents.length === 0) {
+    return undefined;
+  }
+
+  const scored = agents
+    .map((agent) => ({ agent, score: scoreAgentForText(agent, text) }))
+    .sort((a, b) => b.score - a.score);
+
+  const best = scored[0];
+  if (best && best.score > 0) {
+    return best.agent;
+  }
+
+  return agents[0];
 }
 
 function buildCommand(raw: string, agents: AgentRecord[]): { command: string; routedAgent?: AgentRecord } {
@@ -72,6 +155,9 @@ function buildCommand(raw: string, agents: AgentRecord[]): { command: string; ro
   }
 
   const routedAgent = autoSelectAgent(agents, trimmed);
+  if (!routedAgent) {
+    throw new Error("Unable to determine a suitable agent for this request");
+  }
   return {
     command: `/run ${routedAgent.id} "${trimmed}"`,
     routedAgent,
@@ -88,18 +174,83 @@ function describeResponse(response: CommandResponse): string {
   return response.message ?? "Command executed.";
 }
 
+function formatTaskResult(task: TaskRecord): string {
+  const { result } = task;
+  if (!result) {
+    return `Task ${task.status}`;
+  }
+
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (typeof result === "number" || typeof result === "boolean") {
+    return String(result);
+  }
+
+  if (Array.isArray(result)) {
+    return result.map((item) => (typeof item === "string" ? item : JSON.stringify(item, null, 2))).join("\n");
+  }
+
+  if (typeof result === "object") {
+    const summary =
+      typeof (result as Record<string, unknown>).summary === "string"
+        ? (result as Record<string, unknown>).summary
+        : undefined;
+    if (summary) {
+      return summary;
+    }
+    const message =
+      typeof (result as Record<string, unknown>).message === "string"
+        ? (result as Record<string, unknown>).message
+        : undefined;
+    if (message) {
+      return message;
+    }
+    return JSON.stringify(result, null, 2);
+  }
+
+  return String(result);
+}
+
+function formatMemoryUpdate(agent: AgentRecord, entries: MemoryEntry[]): string {
+  if (entries.length === 0) {
+    return `${agent.name} has no stored memories yet.`;
+  }
+
+  const lines = entries.map((entry) => `• ${entry.content}`);
+  return [`Recent memories for ${agent.name}:`, ...lines].join("\n");
+}
+
 export default function CommandConsole() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [pendingAgent, setPendingAgent] = useState<AgentRecord | undefined>();
+  const [agentContexts, setAgentContexts] = useState<
+    Record<
+      string,
+      {
+        objectives: string[];
+        memories: MemoryEntry[];
+      }
+    >
+  >({});
+  const trackedTasks = useRef(new Map<string, { agent: AgentRecord; prompt: string; status?: string }>());
+  const handledTasks = useRef(new Set<string>());
 
   const { data: agents = [] } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api.listAgents(),
     select: (res) => res.items,
     refetchInterval: 20_000,
+  });
+
+  const { data: tasks = [] } = useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => api.listTasks().then((res) => res.items),
+    refetchInterval: 5_000,
   });
 
   const commandMutation = useMutation({
@@ -109,9 +260,23 @@ export default function CommandConsole() {
         ...prev,
         {
           role: "assistant",
-          content: describeResponse(response),
+          content:
+            response.task && (response.agent || pendingAgent)
+              ? `${(response.agent ?? pendingAgent)?.name ?? "Agent"} is processing "${
+                  response.task.prompt
+                }". I'll share the results soon.`
+              : describeResponse(response),
+          agentId: (response.agent ?? pendingAgent)?.id,
+          taskId: response.task?.id,
+          kind: "status",
         },
       ]);
+      if (response.task && (response.agent || pendingAgent)) {
+        const agent = response.agent ?? pendingAgent;
+        if (agent) {
+          trackedTasks.current.set(response.task.id, { agent, prompt: response.task.prompt, status: response.task.status });
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
       setPendingAgent(undefined);
@@ -138,6 +303,169 @@ export default function CommandConsole() {
     return agents.slice(0, 4).map((agent) => `@${agent.name} run a status update`);
   }, [agents]);
 
+  const ensureAgentContext = useCallback(
+    async (agent: AgentRecord) => {
+      const existingContext = agentContexts[agent.id];
+      setAgentContexts((prev) => {
+        if (prev[agent.id]) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [agent.id]: {
+            objectives: extractObjectives(agent.objectives),
+            memories: [],
+          },
+        };
+      });
+
+      setMessages((prev) => {
+        const hasContext = prev.some((message) => message.kind === "context" && message.agentId === agent.id);
+        if (hasContext) {
+          return prev;
+        }
+        const objectives = extractObjectives(agent.objectives);
+        const contextLines = [
+          `Role: ${agent.role || "Unknown role"}`,
+          objectives.length ? `Objectives: ${objectives.join("; ")}` : "Objectives: Not set",
+        ];
+        if (agent.memory_context) {
+          contextLines.push(`Memory context: ${agent.memory_context}`);
+        }
+        return [
+          ...prev,
+          {
+            role: "system",
+            content: [`Context for ${agent.name}:`, ...contextLines].join("\n"),
+            agentId: agent.id,
+            kind: "context",
+          },
+        ];
+      });
+
+      if (existingContext && existingContext.memories.length > 0) {
+        return;
+      }
+
+      try {
+        const memory = await api.getAgentMemory(agent.id, 5);
+        if (memory.items.length > 0) {
+          setAgentContexts((prev) => ({
+            ...prev,
+            [agent.id]: {
+              objectives: prev[agent.id]?.objectives ?? extractObjectives(agent.objectives),
+              memories: memory.items,
+            },
+          }));
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "system",
+              content: formatMemoryUpdate(agent, memory.items),
+              agentId: agent.id,
+              kind: "memory",
+            },
+          ]);
+        }
+      } catch (error) {
+        console.error("Failed to load agent memory", error);
+      }
+    },
+    [agentContexts]
+  );
+
+  const refreshAgentMemory = useCallback(
+    async (agent: AgentRecord) => {
+      try {
+        const memory = await api.getAgentMemory(agent.id, 5);
+        setAgentContexts((prev) => {
+          const current = prev[agent.id];
+          const existingIds = new Set((current?.memories ?? []).map((entry) => entry.id));
+          const newEntries = memory.items.filter((entry) => !existingIds.has(entry.id));
+          if (newEntries.length > 0) {
+            setMessages((prevMessages) => [
+              ...prevMessages,
+              {
+                role: "system",
+                content: formatMemoryUpdate(agent, memory.items.slice(0, 5)),
+                agentId: agent.id,
+                kind: "memory",
+              },
+            ]);
+          }
+          return {
+            ...prev,
+            [agent.id]: {
+              objectives: current?.objectives ?? extractObjectives(agent.objectives),
+              memories: memory.items,
+            },
+          };
+        });
+      } catch (error) {
+        console.error("Failed to refresh agent memory", error);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    tasks.forEach((task) => {
+      if (!trackedTasks.current.has(task.id) && !handledTasks.current.has(task.id)) {
+        return;
+      }
+
+      if (handledTasks.current.has(task.id)) {
+        return;
+      }
+
+      const tracked = trackedTasks.current.get(task.id);
+      const agent = tracked?.agent || agents.find((candidate) => candidate.id === task.agent_id);
+      if (!agent) {
+        return;
+      }
+
+      if (task.status === "working") {
+        const current = trackedTasks.current.get(task.id);
+        if (!current || current.status !== "working") {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "system",
+              content: `${agent.name} is working on "${task.prompt}"...`,
+              agentId: agent.id,
+              taskId: task.id,
+              kind: "status",
+            },
+          ]);
+        }
+        trackedTasks.current.set(task.id, { agent, prompt: task.prompt, status: "working" });
+        return;
+      }
+
+      if (task.status === "completed" || task.status === "error") {
+        handledTasks.current.add(task.id);
+        trackedTasks.current.delete(task.id);
+        const resultText = formatTaskResult(task);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: task.status === "error" ? "system" : "assistant",
+            content:
+              task.status === "error"
+                ? `Task for ${agent.name} failed: ${resultText}`
+                : `${agent.name}: ${resultText}`,
+            agentId: agent.id,
+            taskId: task.id,
+            kind: task.status === "error" ? "status" : "message",
+          },
+        ]);
+        if (task.status === "completed") {
+          refreshAgentMemory(agent);
+        }
+      }
+    });
+  }, [tasks, agents, refreshAgentMemory]);
+
   const handleSend = async () => {
     if (!input.trim()) return;
 
@@ -146,6 +474,9 @@ export default function CommandConsole() {
 
     try {
       const { command, routedAgent } = buildCommand(input, agents);
+      if (routedAgent) {
+        await ensureAgentContext(routedAgent);
+      }
       setPendingAgent(routedAgent);
       await commandMutation.mutateAsync(command);
     } catch (error) {
@@ -198,11 +529,13 @@ export default function CommandConsole() {
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}
               >
                 <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                  className={`max-w-[80%] rounded-2xl px-4 py-3 whitespace-pre-wrap break-words ${
                     message.role === "user"
                       ? "bg-atlas-glow/20 text-foreground ml-auto"
                       : message.role === "system"
-                      ? "bg-destructive/10 text-destructive"
+                      ? message.kind === "context" || message.kind === "memory"
+                        ? "bg-muted/60 text-muted-foreground"
+                        : "bg-destructive/10 text-destructive"
                       : "bg-muted text-foreground"
                   }`}
                 >
