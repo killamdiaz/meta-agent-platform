@@ -6,7 +6,7 @@ import MemoryPanel from './components/MemoryPanel';
 import CreateAgentModal from './components/CreateAgentModal';
 import CommandConsole from './components/CommandConsole';
 import api from './api/client';
-import { Agent, CommandResponse, MemoryEntry } from './types';
+import { Agent, BuildAgentResult, CommandResponse, MemoryEntry } from './types';
 
 const queryClient = new QueryClient();
 
@@ -33,6 +33,16 @@ function Dashboard() {
   const createAgentMutation = useMutation(
     (payload: { name: string; role: string; tools: Record<string, boolean>; objectives: string[] }) =>
       api.createAgent(payload),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['agents']);
+      }
+    }
+  );
+
+  const buildAgentMutation = useMutation(
+    (payload: { promptText: string; persist?: boolean; spawn?: boolean }) =>
+      api.buildAgentFromPrompt({ creator: 'dashboard-ui', ...payload }),
     {
       onSuccess: () => {
         queryClient.invalidateQueries(['agents']);
@@ -68,6 +78,13 @@ function Dashboard() {
 
   const handleCreateAgent = async (payload: { name: string; role: string; tools: Record<string, boolean>; objectives: string[] }) => {
     await createAgentMutation.mutateAsync(payload);
+  };
+
+  const handleGenerateAgent = async (
+    payload: { promptText: string; persist?: boolean; spawn?: boolean }
+  ): Promise<BuildAgentResult> => {
+    const result = await buildAgentMutation.mutateAsync(payload);
+    return result;
   };
 
   const handleStartAgent = (agent: Agent) => {
@@ -128,7 +145,8 @@ function Dashboard() {
       <CreateAgentModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onSubmit={handleCreateAgent}
+        onCreateManual={handleCreateAgent}
+        onGenerateFromPrompt={handleGenerateAgent}
       />
     </div>
   );
