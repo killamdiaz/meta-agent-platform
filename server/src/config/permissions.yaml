@@ -1,0 +1,27 @@
+browser:
+  - fetch
+  - analyze
+  - summarize
+api:
+  - fetch
+  - analyze
+email:
+  - communicate
+  - notify
+scheduler:
+  - schedule
+  - automate
+notifier:
+  - notify
+  - alert
+code_executor:
+  - run_code
+  - analyze
+memory:
+  - remember
+  - retrieve
+summarizer:
+  - summarize
+llm:
+  - analyze
+  - synthesize

@@ -5,6 +5,7 @@ import { initDb } from './db.js';
 import agentsRoute from './routes/agents.js';
 import tasksRoute from './routes/tasks.js';
 import commandsRoute from './routes/commands.js';
+import agentBuilderRoute from './routes/agentBuilder.js';
 import { coordinator } from './core/Coordinator.js';
 
 async function bootstrap() {
@@ -21,6 +22,7 @@ async function bootstrap() {
   app.use('/agents', agentsRoute);
   app.use('/tasks', tasksRoute);
   app.use('/commands', commandsRoute);
+  app.use('/agent-builder', agentBuilderRoute);
 
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);
