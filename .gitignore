@@ -7,5 +7,5 @@ server/dist/
 .data-*/
 .data
 .data*
-frontend/build/
+meta-agent-platform-ui/dist/
 .docker/

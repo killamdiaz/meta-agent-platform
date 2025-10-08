@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db.js';
 import { Agent, type AgentRecord } from './Agent.js';
 import { MemoryService } from '../services/MemoryService.js';
+import { agentEvents } from '../events.js';
 
 export interface TaskRecord {
   id: string;
@@ -47,7 +48,70 @@ export class AgentManager {
        RETURNING *`,
       [agentId, prompt]
     );
-    return rows[0];
+    const task = rows[0];
+    agentEvents.emit('task:queued', {
+      taskId: task.id,
+      agentId: task.agent_id,
+      prompt: task.prompt,
+      timestamp: new Date().toISOString()
+    });
+    return task;
+  }
+
+  async updateAgent(
+    id: string,
+    payload: Partial<{
+      name: string;
+      role: string;
+      tools: Record<string, unknown>;
+      objectives: unknown;
+      memory_context: string;
+      status: string;
+    }>
+  ) {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (payload.name !== undefined) {
+      fields.push(`name = $${fields.length + 1}`);
+      values.push(payload.name);
+    }
+    if (payload.role !== undefined) {
+      fields.push(`role = $${fields.length + 1}`);
+      values.push(payload.role);
+    }
+    if (payload.tools !== undefined) {
+      fields.push(`tools = $${fields.length + 1}`);
+      values.push(payload.tools);
+    }
+    if (payload.objectives !== undefined) {
+      fields.push(`objectives = $${fields.length + 1}`);
+      values.push(payload.objectives);
+    }
+    if (payload.memory_context !== undefined) {
+      fields.push(`memory_context = $${fields.length + 1}`);
+      values.push(payload.memory_context);
+    }
+    if (payload.status !== undefined) {
+      fields.push(`status = $${fields.length + 1}`);
+      values.push(payload.status);
+    }
+    if (fields.length === 0) {
+      return this.getAgent(id);
+    }
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+    const { rows } = await pool.query<AgentRecord>(
+      `UPDATE agents
+          SET ${fields.join(', ')}
+        WHERE id = $${values.length}
+        RETURNING *`,
+      values
+    );
+    return rows[0] ?? null;
+  }
+
+  async deleteAgent(id: string) {
+    await pool.query('DELETE FROM agents WHERE id = $1', [id]);
   }
 
   async listTasks(status?: string) {
@@ -119,6 +183,12 @@ export class AgentManager {
   }
 
   async handleTask(task: TaskRecord) {
+    agentEvents.emit('task:start', {
+      taskId: task.id,
+      agentId: task.agent_id,
+      prompt: task.prompt,
+      timestamp: new Date().toISOString()
+    });
     await withTransaction(async (client) => {
       await this.markTaskRunning(client, task.id);
       await this.updateAgentStatus(client, task.agent_id, 'working');
@@ -131,10 +201,28 @@ export class AgentManager {
       }
       const agent = this.instantiate(record);
       const thought = await agent.think(task.prompt);
+      agentEvents.emit('task:thought', {
+        taskId: task.id,
+        agentId: task.agent_id,
+        thought,
+        timestamp: new Date().toISOString()
+      });
       const action = await agent.act({ id: task.id, prompt: task.prompt }, thought);
+      agentEvents.emit('task:action', {
+        taskId: task.id,
+        agentId: task.agent_id,
+        action,
+        timestamp: new Date().toISOString()
+      });
       await withTransaction(async (client) => {
         await this.markTaskCompleted(client, task.id, { thought, action });
         await this.updateAgentStatus(client, task.agent_id, 'idle');
+      });
+      agentEvents.emit('task:completed', {
+        taskId: task.id,
+        agentId: task.agent_id,
+        result: { thought, action },
+        timestamp: new Date().toISOString()
       });
     } catch (error) {
       await withTransaction(async (client) => {
@@ -142,6 +230,12 @@ export class AgentManager {
           message: error instanceof Error ? error.message : 'unknown error'
         });
         await this.updateAgentStatus(client, task.agent_id, 'error');
+      });
+      agentEvents.emit('task:error', {
+        taskId: task.id,
+        agentId: task.agent_id,
+        error: error instanceof Error ? error.message : error,
+        timestamp: new Date().toISOString()
       });
       throw error;
     }

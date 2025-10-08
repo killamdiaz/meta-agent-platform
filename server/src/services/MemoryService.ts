@@ -25,20 +25,24 @@ export class MemoryService {
 
   static async listMemories(agentId: string, limit = 10) {
     const { rows } = await pool.query(
-      `SELECT id, content, metadata, created_at
+      `SELECT id, content, metadata, created_at, embedding::text AS embedding
          FROM agent_memory
         WHERE agent_id = $1
         ORDER BY created_at DESC
         LIMIT $2`,
       [agentId, limit]
     );
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      similarity: typeof row.similarity === 'number' ? row.similarity : Number(row.similarity ?? 0),
+      embedding: MemoryService.fromVector(row.embedding)
+    }));
   }
 
   static async search(agentId: string, query: string, limit = 5) {
     const embedding = deterministicEmbedding(query);
     const { rows } = await pool.query(
-      `SELECT id, content, metadata, created_at,
+      `SELECT id, content, metadata, created_at, embedding::text AS embedding,
               1 - (embedding <=> $2::vector) AS similarity
          FROM agent_memory
         WHERE agent_id = $1
@@ -46,7 +50,39 @@ export class MemoryService {
         LIMIT $3`,
       [agentId, MemoryService.toVector(embedding), limit]
     );
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      embedding: MemoryService.fromVector(row.embedding)
+    }));
+  }
+
+  static async listGraph(agentId?: string, limit = 200) {
+    const params: unknown[] = [];
+    let where = '';
+    if (agentId) {
+      params.push(agentId);
+      where = `WHERE m.agent_id = $${params.length}`;
+    }
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT m.id,
+              m.agent_id,
+              m.content,
+              m.metadata,
+              m.created_at,
+              m.embedding::text AS embedding,
+              a.name AS agent_name
+         FROM agent_memory m
+         JOIN agents a ON a.id = m.agent_id
+         ${where}
+         ORDER BY m.created_at DESC
+         LIMIT $${params.length}`,
+      params
+    );
+    return rows.map((row) => ({
+      ...row,
+      embedding: MemoryService.fromVector(row.embedding)
+    }));
   }
 
   static async attachToTransaction(
@@ -65,5 +101,22 @@ export class MemoryService {
 
   private static toVector(values: number[]) {
     return `[${values.join(',')}]`;
+  }
+
+  private static fromVector(value: unknown): number[] {
+    if (Array.isArray(value)) {
+      return value.map((entry) => Number(entry));
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim().replace(/^\[|\]$/g, '');
+      if (!trimmed) {
+        return [];
+      }
+      return trimmed
+        .split(',')
+        .map((part) => Number(part.trim()))
+        .filter((num) => Number.isFinite(num));
+    }
+    return [];
   }
 }

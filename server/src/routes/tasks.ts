@@ -14,14 +14,24 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+const taskSchema = z.object({
+  agentId: z.string().uuid(),
+  prompt: z.string().min(1)
+});
+
+router.post('/', async (req, res, next) => {
+  try {
+    const body = taskSchema.parse(req.body);
+    const task = await agentManager.addTask(body.agentId, body.prompt);
+    res.status(201).json(task);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/assign', async (req, res, next) => {
   try {
-    const body = z
-      .object({
-        agentId: z.string().uuid(),
-        prompt: z.string().min(1)
-      })
-      .parse(req.body);
+    const body = taskSchema.parse(req.body);
     const task = await agentManager.addTask(body.agentId, body.prompt);
     res.status(201).json(task);
   } catch (error) {

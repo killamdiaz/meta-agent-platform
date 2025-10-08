@@ -13,6 +13,10 @@ const createAgentSchema = z.object({
   memory_context: z.string().optional()
 });
 
+const updateAgentSchema = createAgentSchema.partial().extend({
+  status: z.enum(['idle', 'working', 'error']).optional()
+});
+
 router.post('/', async (req, res, next) => {
   try {
     const payload = createAgentSchema.parse(req.body);
@@ -24,6 +28,28 @@ router.post('/', async (req, res, next) => {
       memory_context: payload.memory_context ?? ''
     });
     res.status(201).json(agent);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const payload = updateAgentSchema.parse(req.body);
+    const agent = await agentManager.updateAgent(id, {
+      name: payload.name,
+      role: payload.role,
+      tools: payload.tools,
+      objectives: payload.objectives,
+      memory_context: payload.memory_context,
+      status: payload.status
+    });
+    if (!agent) {
+      res.status(404).json({ message: 'Agent not found' });
+      return;
+    }
+    res.json(agent);
   } catch (error) {
     next(error);
   }
@@ -88,6 +114,16 @@ router.patch('/:id/status', async (req, res, next) => {
     }
     await agentManager.setAgentStatus(id, body.status);
     res.json({ ...agent, status: body.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    await agentManager.deleteAgent(id);
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
