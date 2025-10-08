@@ -10,3 +10,4 @@ meta-agent-platform-ui/dist/
 .data*
 frontend/build/
 .docker/
+data/db
