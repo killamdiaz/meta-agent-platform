@@ -66,6 +66,58 @@ const DOMAIN_MAPPINGS: { keywords: RegExp[]; domains: string[] }[] = [
 
 const INTERNET_CUES = [/internet/i, /online/i, /fetch/i, /browser/i, /api/i, /scrape/i, /news/i, /monitor/i];
 
+const MODEL_PREFIXES = [
+  'gpt',
+  'claude',
+  'llama',
+  'mixtral',
+  'mistral',
+  'gemini',
+  'command',
+  'sonnet',
+  'opus',
+  'haiku',
+  'phi',
+  'bison',
+  'qwen',
+  'yi',
+  'orca',
+  'ernie',
+  'deepseek',
+  'palm',
+  'gemma',
+  'jurassic',
+  'cohere',
+  'mpt',
+  'openai',
+  'anthropic'
+];
+
+const MODEL_SUFFIXES = [
+  'turbo',
+  'mini',
+  'preview',
+  'flash',
+  'pro',
+  'ultra',
+  'instant',
+  'sonnet',
+  'opus',
+  'haiku',
+  'large',
+  'medium',
+  'small',
+  'chat',
+  'instruct'
+];
+
+const MODEL_HINT_PATTERNS = [
+  /\b(?:model|llm)\s*(?:name)?\s*[:=]\s*["'“”]?([\w.:\/\-]+)["'“”]?/i,
+  /\b(?:use|using|with|via|run(?:ning)?\s+on|powered\s+by|target)\s+(?:the\s+)?([\w.:\/\-]+)/i,
+  /\bcall\s+(?:the\s+)?([\w.:\/\-]+)\s+model\b/i,
+  /\b(?:switch|default)\s+to\s+(?:the\s+)?([\w.:\/\-]+)/i
+];
+
 const SUMMARY_CUES = [/summary/i, /summari[sz]e/i, /digest/i];
 
 function dedupe<T>(items: T[]): T[] {
@@ -104,6 +156,99 @@ function summarizePrompt(prompt: string): string {
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   }
   return `${trimmed.slice(0, 137)}...`;
+}
+
+function sanitizeModelCandidate(raw: string | undefined | null): string | null {
+  if (!raw) {
+    return null;
+  }
+  const cleaned = raw.trim().replace(/^["'`“”]+|["'`“”,.;:!?]+$/g, '');
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function isLikelyModelName(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(lower)) {
+    return true;
+  }
+  if (MODEL_PREFIXES.some((prefix) => lower === prefix || lower.startsWith(`${prefix}-`) || lower.startsWith(prefix))) {
+    return true;
+  }
+  if (lower.includes('gpt') || lower.includes('claude') || lower.includes('llama') || lower.includes('mixtral') || lower.includes('mistral')) {
+    return true;
+  }
+  if (/[0-9]/.test(lower) && (lower.includes('-') || lower.includes('.') || lower.includes('_'))) {
+    return true;
+  }
+  if (lower.includes('/') && MODEL_PREFIXES.some((prefix) => lower.includes(prefix))) {
+    return true;
+  }
+  return false;
+}
+
+function buildCombinedModelToken(tokens: string[], startIndex: number): string | null {
+  const parts: string[] = [];
+  for (let index = startIndex; index < tokens.length && parts.length < 3; index += 1) {
+    const sanitized = sanitizeModelCandidate(tokens[index]);
+    if (!sanitized) {
+      break;
+    }
+    const lower = sanitized.toLowerCase();
+    if (parts.length === 0) {
+      parts.push(sanitized);
+      continue;
+    }
+    const isSuffix = MODEL_SUFFIXES.includes(lower);
+    if (/\d/.test(lower) || lower.includes('.') || isSuffix) {
+      parts.push(sanitized);
+    } else {
+      break;
+    }
+  }
+
+  if (parts.length <= 1) {
+    return null;
+  }
+
+  const candidate = parts.join('-').replace(/--+/g, '-');
+  const sanitizedCandidate = sanitizeModelCandidate(candidate);
+  if (sanitizedCandidate && isLikelyModelName(sanitizedCandidate)) {
+    return sanitizedCandidate;
+  }
+
+  return null;
+}
+
+function extractModelFromTokens(prompt: string): string | null {
+  const tokens = prompt.split(/\s+/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const sanitized = sanitizeModelCandidate(tokens[i]);
+    if (!sanitized) {
+      continue;
+    }
+    const lower = sanitized.toLowerCase();
+    const startsWithPrefix = MODEL_PREFIXES.some((prefix) => lower === prefix || lower.startsWith(`${prefix}-`) || lower.startsWith(prefix));
+    if (!startsWithPrefix) {
+      continue;
+    }
+
+    const combined = buildCombinedModelToken(tokens, i);
+    if (combined) {
+      return combined;
+    }
+
+    if (
+      isLikelyModelName(sanitized) &&
+      (/[0-9]/.test(sanitized) || sanitized.includes('-') || sanitized.includes('.') || sanitized.length > 4)
+    ) {
+      return sanitized;
+    }
+  }
+
+  return null;
 }
 
 function extractGoals(prompt: string): string[] {
@@ -227,6 +372,49 @@ function shouldAllowInternet(prompt: string): boolean {
   return INTERNET_CUES.some((pattern) => pattern.test(prompt));
 }
 
+function detectModel(prompt: string): string {
+  const runMatch = prompt.match(/\/run\s+([A-Za-z0-9-]{6,})/i);
+  const runCandidate = sanitizeModelCandidate(runMatch?.[1]);
+  if (runCandidate) {
+    return runCandidate;
+  }
+
+  const uuidMatch = prompt.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (uuidMatch) {
+    return uuidMatch[0];
+  }
+
+  for (const pattern of MODEL_HINT_PATTERNS) {
+    const match = prompt.match(pattern);
+    const candidate = sanitizeModelCandidate(match?.[1]);
+    if (
+      candidate &&
+      isLikelyModelName(candidate) &&
+      (/[0-9]/.test(candidate) || candidate.includes('-') || candidate.includes('.') || candidate.length > 4)
+    ) {
+      return candidate;
+    }
+  }
+
+  const tokenCandidate = extractModelFromTokens(prompt);
+  if (tokenCandidate) {
+    return tokenCandidate;
+  }
+
+  const knownModelMatch = prompt.match(
+    /\b(gpt[0-9a-z_.-]*|claude[0-9a-z_.-]*|llama[0-9a-z_.-]*|mixtral[0-9a-z_.-]*|mistral[0-9a-z_.-]*|gemini[0-9a-z_.-]*|command[0-9a-z_.-]*|sonnet[0-9a-z_.-]*|opus[0-9a-z_.-]*|haiku[0-9a-z_.-]*|phi[0-9a-z_.-]*|bison[0-9a-z_.-]*|qwen[0-9a-z_.-]*|yi[0-9a-z_.-]*|orca[0-9a-z_.-]*|ernie[0-9a-z_.-]*|deepseek[0-9a-z_.-]*|palm[0-9a-z_.-]*|gemma[0-9a-z_.-]*|jurassic[0-9a-z_.-]*|cohere[0-9a-z_.-]*|mpt[0-9a-z_.-]*|openai[0-9a-z_.-]*|anthropic[0-9a-z_.-]*)\b/i
+  );
+  const knownCandidate = sanitizeModelCandidate(knownModelMatch?.[0]);
+  if (
+    knownCandidate &&
+    (/[0-9]/.test(knownCandidate) || knownCandidate.includes('-') || knownCandidate.includes('.') || knownCandidate.length > 4)
+  ) {
+    return knownCandidate;
+  }
+
+  return 'gpt-5';
+}
+
 export class NaturalLanguageAgentBuilder {
   constructor(private readonly sandboxManager = new SandboxManager()) {}
 
@@ -241,6 +429,7 @@ export class NaturalLanguageAgentBuilder {
     const execution_interval = detectInterval(promptText);
     const memory = detectMemory(promptText);
     const autonomy_level = detectAutonomy(promptText);
+    const model = detectModel(promptText);
 
     const spec: AgentSpec = {
       name,
@@ -252,7 +441,7 @@ export class NaturalLanguageAgentBuilder {
         autonomy_level,
         execution_interval
       },
-      model: 'gpt-5',
+      model,
       securityProfile: {
         sandbox: true,
         network: {
