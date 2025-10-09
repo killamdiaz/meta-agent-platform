@@ -158,7 +158,8 @@ export class InternetAccessModule {
     try {
       const parsed = new URL(url);
       const normalized = `${parsed.hostname}${parsed.pathname}${parsed.search ?? ''}`.replace(/^\/+/, '');
-      return `https://r.jina.ai/http://${normalized}`;
+      const protocol = parsed.protocol === 'https:' ? 'https' : 'http';
+      return `https://r.jina.ai/${protocol}://${normalized}`;
     } catch {
       return null;
     }
