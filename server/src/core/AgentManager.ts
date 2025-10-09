@@ -4,6 +4,7 @@ import { Agent, type AgentRecord } from './Agent.js';
 import { MemoryService } from '../services/MemoryService.js';
 import type { FetchResult } from '../services/InternetAccessModule.js';
 import { metaController } from './MetaController.js';
+import { webTool, type WebToolResult } from '../tools/webTool.js';
 
 export interface TaskRecord {
   id: string;
@@ -48,6 +49,13 @@ export type TaskStreamEvent =
 
 export class AgentManager {
   private taskListeners = new Map<string, Set<(event: TaskStreamEvent) => void>>();
+  private readonly tools: Record<string, typeof webTool>;
+
+  constructor() {
+    this.tools = {
+      web: webTool,
+    };
+  }
 
   private static extractUrls(text: string) {
     const urlPattern = /https?:\/\/[^\s)]+/gi;
@@ -79,6 +87,8 @@ export class AgentManager {
     const patterns: RegExp[] = [
       /research(?:\s+(?:on|about))?\s+([^.;\n]+)/gi,
       /look\s+up\s+([^.;\n]+)/gi,
+      /search(?:\s+(?:for|about))?\s+([^.;\n]+)/gi,
+      /fetch\s+(?:information|info)\s+(?:on|about)\s+([^.;\n]+)/gi,
       /find\s+(?:information|info)\s+(?:on|about)\s+([^.;\n]+)/gi,
       /what\s+can\s+you\s+tell\s+me\s+about\s+([^.?\n]+)/gi,
       /who\s+is\s+([^.?\n]+)/gi,
@@ -117,6 +127,20 @@ export class AgentManager {
     }
 
     return normalized.slice(0, 3);
+  }
+
+  private static sanitizeSearchResults(result: WebToolResult['result']) {
+    if (!Array.isArray(result)) {
+      return [];
+    }
+
+    return result
+      .filter((entry) => Boolean(entry?.url) && /^https?:\/\//i.test(entry.url))
+      .map((entry) => ({
+        title: entry.title?.trim() || entry.url,
+        url: entry.url,
+        snippet: entry.snippet?.trim() || entry.title?.trim() || '',
+      }));
   }
 
   async allAgents(): Promise<AgentRecord[]> {
@@ -406,9 +430,19 @@ export class AgentManager {
       await metaController.onTaskStarted(task, { id: agent.id, name: agent.name });
 
       let augmentedPrompt = task.prompt;
+      const researchQueries = agent.internetEnabled ? AgentManager.deriveResearchQueries(task.prompt) : [];
+
+      if (!agent.internetEnabled && researchQueries.length > 0) {
+        this.emitTaskEvent(task.id, {
+          type: 'log',
+          message: `${agentRecord.name} cannot browse because internet access is disabled for this agent.`,
+          agent: agentRecord,
+        });
+      }
+
       if (agent.internetEnabled) {
         const urls = AgentManager.extractUrls(task.prompt);
-        const researchQueries = AgentManager.deriveResearchQueries(task.prompt);
+        const webSearchTool = this.tools.web;
         const researchNotes: string[] = [];
         const seenSources = new Set<string>();
 
@@ -435,6 +469,18 @@ export class AgentManager {
           if (researchBlock) {
             researchNotes.push(researchBlock);
           }
+        };
+
+        const appendSearchSnippet = (result: { title: string; url: string; snippet: string }) => {
+          if (seenSources.has(result.url)) {
+            return;
+          }
+          seenSources.add(result.url);
+          researchNotes.push(
+            [`Source: ${result.title}`, `URL: ${result.url}`, result.snippet ? `Snippet: ${result.snippet}` : null]
+              .filter((line): line is string => Boolean(line && line.trim().length > 0))
+              .join('\n')
+          );
         };
 
         for (const url of urls) {
@@ -477,32 +523,53 @@ export class AgentManager {
                 message: `${agent.name} is searching the web for "${fallbackQuery}"...`,
                 agent: agentRecord,
               });
+              if (!webSearchTool?.enabled) {
+                this.emitTaskEvent(task.id, {
+                  type: 'log',
+                  message:
+                    'I can’t browse the web in this mode. Enable web access by setting WEB_ENABLED=true in environment variables.',
+                  agent: agentRecord,
+                });
+                continue;
+              }
+
               try {
-                const searchResults = await agent.webSearch(fallbackQuery);
-                const [topResult] = searchResults;
-                if (topResult) {
-                  this.emitTaskEvent(task.id, {
-                    type: 'log',
-                    message: `Following up with ${topResult.title || topResult.url}`,
-                    agent: agentRecord,
-                  });
-                  try {
-                    const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
-                    appendResearchResult(followUp);
-                  } catch (followUpError) {
-                    const followUpMessage =
-                      followUpError instanceof Error
-                        ? followUpError.message
-                        : typeof followUpError === 'string'
-                          ? followUpError
-                          : 'Unknown error';
+                const outcome = await webSearchTool.execute(fallbackQuery);
+                const searchResults = AgentManager.sanitizeSearchResults(outcome.result);
+                if (searchResults.length > 0) {
+                  searchResults.forEach(appendSearchSnippet);
+                  const [topResult] = searchResults;
+                  if (topResult) {
                     this.emitTaskEvent(task.id, {
                       type: 'log',
-                      message: `Unable to retrieve ${topResult.url}: ${followUpMessage}`,
+                      message: `Following up with ${topResult.title || topResult.url}`,
+                      agent: agentRecord,
+                    });
+                    try {
+                      const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
+                      appendResearchResult(followUp);
+                    } catch (followUpError) {
+                      const followUpMessage =
+                        followUpError instanceof Error
+                          ? followUpError.message
+                          : typeof followUpError === 'string'
+                            ? followUpError
+                            : 'Unknown error';
+                      this.emitTaskEvent(task.id, {
+                        type: 'log',
+                        message: `Unable to retrieve ${topResult.url}: ${followUpMessage}`,
+                        agent: agentRecord,
+                      });
+                    }
+                  }
+                } else {
+                  if (typeof outcome.result === 'string') {
+                    this.emitTaskEvent(task.id, {
+                      type: 'log',
+                      message: outcome.result,
                       agent: agentRecord,
                     });
                   }
-                } else {
                   this.emitTaskEvent(task.id, {
                     type: 'log',
                     message: `No web results found for "${fallbackQuery}"`,
@@ -534,33 +601,54 @@ export class AgentManager {
               agent: agentRecord,
             });
 
-            try {
-              const searchResults = await agent.webSearch(query);
-              const [topResult] = searchResults;
-              if (topResult) {
-                this.emitTaskEvent(task.id, {
-                  type: 'log',
-                  message: `Following up with ${topResult.title || topResult.url}`,
-                  agent: agentRecord,
-                });
+            if (!webSearchTool?.enabled) {
+              this.emitTaskEvent(task.id, {
+                type: 'log',
+                message:
+                  'I can’t browse the web in this mode. Enable web access by setting WEB_ENABLED=true in environment variables.',
+                agent: agentRecord,
+              });
+              continue;
+            }
 
-                try {
-                  const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
-                  appendResearchResult(followUp);
-                } catch (followUpError) {
-                  const followUpMessage =
-                    followUpError instanceof Error
-                      ? followUpError.message
-                      : typeof followUpError === 'string'
-                        ? followUpError
-                        : 'Unknown error';
+            try {
+              const outcome = await webSearchTool.execute(query);
+              const searchResults = AgentManager.sanitizeSearchResults(outcome.result);
+              if (searchResults.length > 0) {
+                searchResults.forEach(appendSearchSnippet);
+                const [topResult] = searchResults;
+                if (topResult) {
                   this.emitTaskEvent(task.id, {
                     type: 'log',
-                    message: `Unable to retrieve ${topResult.url}: ${followUpMessage}`,
+                    message: `Following up with ${topResult.title || topResult.url}`,
+                    agent: agentRecord,
+                  });
+
+                  try {
+                    const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
+                    appendResearchResult(followUp);
+                  } catch (followUpError) {
+                    const followUpMessage =
+                      followUpError instanceof Error
+                        ? followUpError.message
+                        : typeof followUpError === 'string'
+                          ? followUpError
+                          : 'Unknown error';
+                    this.emitTaskEvent(task.id, {
+                      type: 'log',
+                      message: `Unable to retrieve ${topResult.url}: ${followUpMessage}`,
+                      agent: agentRecord,
+                    });
+                  }
+                }
+              } else {
+                if (typeof outcome.result === 'string') {
+                  this.emitTaskEvent(task.id, {
+                    type: 'log',
+                    message: outcome.result,
                     agent: agentRecord,
                   });
                 }
-              } else {
                 this.emitTaskEvent(task.id, {
                   type: 'log',
                   message: `No web results found for "${query}"`,
