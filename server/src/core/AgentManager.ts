@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db.js';
 import { Agent, type AgentRecord } from './Agent.js';
 import { MemoryService } from '../services/MemoryService.js';
+import { metaController } from './MetaController.js';
 
 export interface TaskRecord {
   id: string;
@@ -57,6 +58,7 @@ export class AgentManager {
     tools: Record<string, unknown> | string;
     objectives: unknown;
     memory_context?: string;
+    internet_access_enabled?: boolean;
   }) {
     let toolsJson: string;
     if (typeof payload.tools === 'string') {
@@ -85,10 +87,17 @@ export class AgentManager {
     }
 
     const { rows } = await pool.query<AgentRecord>(
-      `INSERT INTO agents(name, role, tools, objectives, memory_context)
-       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+      `INSERT INTO agents(name, role, tools, objectives, memory_context, internet_access_enabled)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
         RETURNING *`,
-      [payload.name, payload.role, toolsJson, objectivesJson, payload.memory_context ?? '']
+      [
+        payload.name,
+        payload.role,
+        toolsJson,
+        objectivesJson,
+        payload.memory_context ?? '',
+        payload.internet_access_enabled ?? false,
+      ]
     );
     return rows[0];
   }
@@ -131,6 +140,7 @@ export class AgentManager {
       objectives?: unknown;
       memory_context?: string;
       status?: string;
+      internet_access_enabled?: boolean;
     }
   ) {
     const assignments: string[] = [];
@@ -188,6 +198,11 @@ export class AgentManager {
     if (updates.status !== undefined) {
       assignments.push(`status = $${assignments.length + 1}`);
       values.push(updates.status);
+    }
+
+    if (updates.internet_access_enabled !== undefined) {
+      assignments.push(`internet_access_enabled = $${assignments.length + 1}`);
+      values.push(updates.internet_access_enabled);
     }
 
     if (assignments.length === 0) {
@@ -307,9 +322,11 @@ export class AgentManager {
       if (!agentRecord) {
         throw new Error(`Agent ${task.agent_id} not found`);
       }
+      await metaController.onTaskScheduled(task);
       this.emitTaskEvent(task.id, { type: 'status', status: task.status as TaskRecord['status'], task, agent: agentRecord });
 
       const agent = this.instantiate(agentRecord);
+      await metaController.onTaskStarted(task, { id: agent.id, name: agent.name });
       const thought = await agent.think(task.prompt, (token) => {
         this.emitTaskEvent(task.id, { type: 'token', token });
       });
@@ -323,6 +340,7 @@ export class AgentManager {
       task.status = 'completed';
       task.result = result;
 
+      await metaController.onTaskCompleted(task, result);
       this.emitTaskEvent(task.id, { type: 'complete', status: 'completed', task, agent: agentRecord });
     } catch (error) {
       const failure =
@@ -336,6 +354,7 @@ export class AgentManager {
       });
       task.status = 'error';
       task.result = { message: failure };
+      await metaController.onTaskFailed(task, failure);
       this.emitTaskEvent(task.id, {
         type: 'error',
         status: 'error',

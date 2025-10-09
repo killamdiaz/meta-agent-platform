@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { AgentRecord } from "@/types/api";
@@ -21,7 +22,9 @@ interface ConfigPanelProps {
   agent: AgentRecord | null;
   onUpdate: (
     id: string,
-    updates: Partial<Pick<AgentRecord, "name" | "role" | "memory_context" | "status">> & { objectives?: string[] }
+    updates: Partial<Pick<AgentRecord, "name" | "role" | "memory_context" | "status" | "internet_access_enabled">> & {
+      objectives?: string[];
+    }
   ) => Promise<unknown>;
   onDelete: (id: string) => Promise<unknown>;
   isSaving?: boolean;
@@ -37,6 +40,7 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
   const [objectives, setObjectives] = useState("");
   const [memoryContext, setMemoryContext] = useState("");
   const [status, setStatus] = useState<AgentRecord["status"]>("idle");
+  const [internetAccess, setInternetAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localSaving, setLocalSaving] = useState(false);
   const [localDeleting, setLocalDeleting] = useState(false);
@@ -61,6 +65,7 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
     setObjectives(objectivesArray.join("\n"));
     setMemoryContext(agent.memory_context ?? "");
     setStatus(agent.status ?? "idle");
+    setInternetAccess(Boolean(agent.internet_access_enabled));
     setError(null);
   }, [agent]);
 
@@ -93,6 +98,7 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
         objectives: updatedObjectives,
         memory_context: memoryContext.trim(),
         status,
+        internet_access_enabled: internetAccess,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update agent");
@@ -177,6 +183,16 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/10 p-3">
+        <div>
+          <Label className="text-sm">Autonomous internet access</Label>
+          <p className="text-xs text-muted-foreground">
+            Toggle to allow this agent to call the sandboxed internet module. Disabled by default.
+          </p>
+        </div>
+        <Switch checked={internetAccess} onCheckedChange={setInternetAccess} />
       </div>
 
       <div className="space-y-2">

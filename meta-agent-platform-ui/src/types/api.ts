@@ -6,6 +6,8 @@ export interface AgentRecord {
   objectives: string[] | null;
   tools: Record<string, unknown>;
   memory_context: string;
+  internet_access_enabled: boolean;
+  settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

@@ -11,7 +11,8 @@ const createAgentSchema = z.object({
   role: z.string().min(2),
   tools: z.record(z.boolean()).default({}),
   objectives: z.array(z.string()).default([]),
-  memory_context: z.string().optional()
+  memory_context: z.string().optional(),
+  internet_access_enabled: z.boolean().optional()
 });
 
 router.post('/', async (req, res, next) => {
@@ -22,7 +23,8 @@ router.post('/', async (req, res, next) => {
       role: payload.role,
       tools: payload.tools,
       objectives: payload.objectives,
-      memory_context: payload.memory_context ?? ''
+      memory_context: payload.memory_context ?? '',
+      internet_access_enabled: payload.internet_access_enabled ?? false
     });
     res.status(201).json(agent);
   } catch (error) {
@@ -60,7 +62,8 @@ const updateAgentSchema = z
     tools: z.union([z.record(z.unknown()), z.string()]).optional(),
     objectives: z.union([z.array(z.string()), z.string(), z.null()]).optional(),
     memory_context: z.string().optional(),
-    status: z.enum(['idle', 'working', 'error']).optional()
+    status: z.enum(['idle', 'working', 'error']).optional(),
+    internet_access_enabled: z.boolean().optional()
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: 'Provide at least one field to update'

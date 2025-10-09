@@ -45,6 +45,7 @@ export function CreateAgentDrawer({
   const [manualObjectives, setManualObjectives] = useState("");
   const [manualTools, setManualTools] = useState("");
   const [manualMemoryContext, setManualMemoryContext] = useState("");
+  const [manualInternetAccess, setManualInternetAccess] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
 
@@ -60,6 +61,7 @@ export function CreateAgentDrawer({
     setManualObjectives("");
     setManualTools("");
     setManualMemoryContext("");
+    setManualInternetAccess(false);
     setManualLoading(false);
     setManualError(null);
     setPrompt("");
@@ -106,6 +108,7 @@ export function CreateAgentDrawer({
         tools,
         objectives,
         memory_context: manualMemoryContext.trim() || undefined,
+        internet_access_enabled: manualInternetAccess,
       });
       resetState();
       onOpenChange(false);
@@ -314,6 +317,16 @@ export function CreateAgentDrawer({
                 onChange={(event) => setManualMemoryContext(event.target.value)}
                 className="min-h-[80px]"
               />
+            </div>
+
+            <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/10 p-4">
+              <div className="space-y-1 pr-4">
+                <Label className="text-sm font-semibold">Autonomous internet access</Label>
+                <p className="text-xs text-muted-foreground">
+                  Disabled by default. Enable to allow browsing, summarization, and citations via the secure proxy.
+                </p>
+              </div>
+              <Switch checked={manualInternetAccess} onCheckedChange={setManualInternetAccess} />
             </div>
 
             {manualError && <p className="text-xs text-destructive">{manualError}</p>}

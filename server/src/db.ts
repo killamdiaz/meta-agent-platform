@@ -18,9 +18,16 @@ export async function initDb() {
       objectives JSONB DEFAULT '[]'::jsonb,
       memory_context TEXT DEFAULT '',
       tools JSONB DEFAULT '{}'::jsonb,
+      internet_access_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      settings JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE agents
+      ADD COLUMN IF NOT EXISTS internet_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE agents
+      ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}'::jsonb;
 
     CREATE TABLE IF NOT EXISTS tasks (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -41,8 +48,52 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS sent_messages (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
+      to_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      html TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      response JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS controller_events (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      related_agent UUID REFERENCES agents(id) ON DELETE SET NULL,
+      related_task UUID REFERENCES tasks(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS controller_approvals (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolution_notes TEXT,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_edges (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      source_agent UUID REFERENCES agents(id) ON DELETE SET NULL,
+      target_agent UUID REFERENCES agents(id) ON DELETE SET NULL,
+      task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+      description TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_agent_memory_agent_id ON agent_memory(agent_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_sent_messages_status ON sent_messages(status);
+    CREATE INDEX IF NOT EXISTS idx_controller_approvals_status ON controller_approvals(status);
   `);
 }
 

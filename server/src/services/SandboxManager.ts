@@ -29,7 +29,8 @@ export class SandboxManager {
         return acc;
       }, {}),
       objectives: agentSpec.goals,
-      memory_context: agentSpec.capabilities.memory ? 'Long-term memory enabled' : ''
+      memory_context: agentSpec.capabilities.memory ? 'Long-term memory enabled' : '',
+      internet_access_enabled: agentSpec.securityProfile.network.allowInternet
     });
 
     return record;

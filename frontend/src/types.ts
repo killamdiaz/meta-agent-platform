@@ -6,6 +6,7 @@ export interface Agent {
   objectives: string[];
   memory_context: string;
   tools: Record<string, boolean>;
+  internet_access_enabled?: boolean;
   created_at: string;
   updated_at: string;
 }

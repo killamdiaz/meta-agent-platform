@@ -12,6 +12,8 @@ import agentBuilderRoute from './routes/agentBuilder.js';
 import { coordinator } from './core/Coordinator.js';
 import insightsRoute from './routes/insights.js';
 import memoryRoute from './routes/memory.js';
+import metaControllerRoute from './routes/metaController.js';
+import { metaController } from './core/MetaController.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,10 +35,20 @@ async function bootstrap() {
   app.use('/agent-builder', agentBuilderRoute);
   app.use('/insights', insightsRoute);
   app.use('/memory', memoryRoute);
+  app.use('/meta-controller', metaControllerRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
-    const apiPrefixes = ['/agents', '/tasks', '/commands', '/agent-builder', '/insights', '/memory', '/healthz'];
+    const apiPrefixes = [
+      '/agents',
+      '/tasks',
+      '/commands',
+      '/agent-builder',
+      '/insights',
+      '/memory',
+      '/meta-controller',
+      '/healthz'
+    ];
     app.use(express.static(publicDir));
     app.get('*', (req, res, next) => {
       if (req.method !== 'GET') {
@@ -60,6 +72,7 @@ async function bootstrap() {
     console.log(`Agent framework API listening on port ${config.port}`);
   });
 
+  await metaController.getMetaAgentId();
   coordinator.start();
 }
 

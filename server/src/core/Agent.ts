@@ -1,6 +1,9 @@
 import OpenAI from 'openai';
 import { config } from '../config.js';
 import { MemoryService } from '../services/MemoryService.js';
+import { internetAccessModule, type FetchOptions, type FetchResult, type SearchResult } from '../services/InternetAccessModule.js';
+import { MailQueueService } from '../services/MailQueueService.js';
+import { metaController } from './MetaController.js';
 
 const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
@@ -12,6 +15,8 @@ export interface AgentRecord {
   objectives: unknown;
   memory_context: string;
   tools: Record<string, unknown>;
+  internet_access_enabled: boolean;
+  settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -36,6 +41,14 @@ export class Agent {
 
   get tools() {
     return this.record.tools;
+  }
+
+  get internetEnabled() {
+    return Boolean(this.record.internet_access_enabled);
+  }
+
+  get settings() {
+    return this.record.settings ?? {};
   }
 
   async loadMemory() {
@@ -95,5 +108,50 @@ export class Agent {
       savedAt: new Date().toISOString()
     });
     return { summary };
+  }
+
+  async fetch(url: string, options: FetchOptions = {}): Promise<FetchResult> {
+    if (!this.internetEnabled) {
+      throw new Error(`Agent ${this.name} does not have internet access enabled.`);
+    }
+
+    const result = await internetAccessModule.fetch(url, { summarize: true, cite: true, ...options });
+    await metaController.recordCollaboration(this.id, await metaController.getMetaAgentId(), null, `Fetched ${url}`);
+    return result;
+  }
+
+  async webSearch(query: string): Promise<SearchResult[]> {
+    if (!this.internetEnabled) {
+      throw new Error(`Agent ${this.name} does not have internet access enabled.`);
+    }
+
+    const results = await internetAccessModule.webSearch(query);
+    await metaController.recordCollaboration(this.id, await metaController.getMetaAgentId(), null, `Search for "${query}"`);
+    return results;
+  }
+
+  async mail(payload: { to: string; subject: string; html: string }) {
+    const approval = await metaController.requestApproval(this.id, 'send_mail', {
+      to: payload.to,
+      subject: payload.subject,
+    });
+
+    if (approval.status !== 'approved') {
+      return {
+        status: 'pending',
+        approvalId: approval.id,
+        message: 'Email requires user approval before being sent.',
+      };
+    }
+
+    const queued = await MailQueueService.enqueue({ agentId: this.id, ...payload });
+    await metaController.recordCollaboration(this.id, await metaController.getMetaAgentId(), null, `Queued email ${queued.id}`);
+    if (queued.status === 'queued') {
+      await MailQueueService.processPending(1);
+    }
+    return {
+      status: 'queued',
+      messageId: queued.id,
+    };
   }
 }

@@ -1,5 +1,6 @@
 import { agentManager } from './AgentManager.js';
 import { config } from '../config.js';
+import { metaController } from './MetaController.js';
 
 export class Coordinator {
   private timer?: NodeJS.Timeout;
@@ -21,6 +22,7 @@ export class Coordinator {
   }
 
   async tick() {
+    await metaController.tick();
     const pending = await agentManager.fetchPendingTasks();
     for (const task of pending) {
       try {

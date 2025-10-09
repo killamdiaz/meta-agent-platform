@@ -25,6 +25,7 @@ export const api = {
     role: string;
     tools: Record<string, boolean>;
     objectives: string[];
+    internet_access_enabled?: boolean;
   }) {
     return request('/agents', {
       method: 'POST',
