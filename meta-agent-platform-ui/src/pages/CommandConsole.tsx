@@ -164,6 +164,12 @@ type TaskStreamPayload =
       agent?: AgentRecord;
     }
   | {
+      type: "log";
+      message: string;
+      detail?: Record<string, unknown>;
+      agent?: AgentRecord;
+    }
+  | {
       type: "complete";
       status: "completed";
       task: TaskRecord;
@@ -212,6 +218,16 @@ export default function CommandConsole() {
               next.streamContent = combined;
               next.status = "working";
               next.streamingState = "streaming";
+              return next;
+            }
+            case "log": {
+              const progressLine = payload.message.trim();
+              const appended = progressLine ? `${progressLine}\n` : "";
+              const combined = `${next.streamContent ?? ""}${appended}`;
+              next.streamContent = combined;
+              next.status = next.status ?? "working";
+              next.streamingState = "streaming";
+              next.content = combined || next.content;
               return next;
             }
             case "status": {

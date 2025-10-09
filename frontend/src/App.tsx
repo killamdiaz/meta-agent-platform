@@ -31,8 +31,13 @@ function Dashboard() {
   });
 
   const createAgentMutation = useMutation(
-    (payload: { name: string; role: string; tools: Record<string, boolean>; objectives: string[] }) =>
-      api.createAgent(payload),
+    (payload: {
+      name: string;
+      role: string;
+      tools: Record<string, boolean>;
+      objectives: string[];
+      internet_access_enabled?: boolean;
+    }) => api.createAgent(payload),
     {
       onSuccess: () => {
         queryClient.invalidateQueries(['agents']);
@@ -76,7 +81,13 @@ function Dashboard() {
     }
   });
 
-  const handleCreateAgent = async (payload: { name: string; role: string; tools: Record<string, boolean>; objectives: string[] }) => {
+  const handleCreateAgent = async (payload: {
+    name: string;
+    role: string;
+    tools: Record<string, boolean>;
+    objectives: string[];
+    internet_access_enabled?: boolean;
+  }) => {
     await createAgentMutation.mutateAsync(payload);
   };
 

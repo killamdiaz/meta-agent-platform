@@ -10,7 +10,15 @@ type Mode = 'natural' | 'manual';
 interface CreateAgentModalProps {
   open: boolean;
   onClose: () => void;
-  onCreateManual: (payload: { name: string; role: string; tools: Record<string, boolean>; objectives: string[] }) => Promise<void>;
+  onCreateManual: (
+    payload: {
+      name: string;
+      role: string;
+      tools: Record<string, boolean>;
+      objectives: string[];
+      internet_access_enabled?: boolean;
+    }
+  ) => Promise<void>;
   onGenerateFromPrompt: (payload: { promptText: string; persist?: boolean; spawn?: boolean }) => Promise<BuildAgentResult>;
 }
 
@@ -20,6 +28,7 @@ export function CreateAgentModal({ open, onClose, onCreateManual, onGenerateFrom
   const [role, setRole] = useState(roleOptions[0]);
   const [objectives, setObjectives] = useState('');
   const [selectedTools, setSelectedTools] = useState<Record<string, boolean>>({});
+  const [internetAccess, setInternetAccess] = useState(false);
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
 
@@ -39,6 +48,7 @@ export function CreateAgentModal({ open, onClose, onCreateManual, onGenerateFrom
     setRole(roleOptions[0]);
     setObjectives('');
     setSelectedTools({});
+    setInternetAccess(false);
     setManualSubmitting(false);
     setManualError(null);
     setPromptText('');
@@ -64,7 +74,8 @@ export function CreateAgentModal({ open, onClose, onCreateManual, onGenerateFrom
         objectives: objectives
           .split('\n')
           .map((line) => line.trim())
-          .filter(Boolean)
+          .filter(Boolean),
+        internet_access_enabled: internetAccess
       });
       resetState();
       onClose();
@@ -353,6 +364,24 @@ export function CreateAgentModal({ open, onClose, onCreateManual, onGenerateFrom
                         onChange={(event) => setObjectives(event.target.value)}
                         placeholder="One goal per line"
                         className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-800/60 px-3 py-2 text-white"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-lg border border-slate-600 bg-slate-800/60 px-3 py-2">
+                      <div className="text-left">
+                        <label htmlFor="manual-internet-toggle" className="text-sm text-slate-200">
+                          Allow autonomous internet access
+                        </label>
+                        <p className="text-xs text-slate-400">
+                          Disabled by default. Enable to let this agent browse and cite external sources securely.
+                        </p>
+                      </div>
+                      <input
+                        id="manual-internet-toggle"
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={internetAccess}
+                        onChange={(event) => setInternetAccess(event.target.checked)}
                       />
                     </div>
 

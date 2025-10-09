@@ -73,6 +73,7 @@ export const api = {
     tools: Record<string, boolean>;
     objectives: string[];
     memory_context?: string;
+    internet_access_enabled?: boolean;
   }): Promise<AgentRecord> {
     return request('/agents', {
       method: 'POST',
@@ -84,6 +85,7 @@ export const api = {
     objectives?: string[];
     tools?: Record<string, unknown>;
     status?: AgentRecord['status'];
+    internet_access_enabled?: boolean;
   }): Promise<AgentRecord | null> {
     return request(`/agents/${id}`, {
       method: 'PATCH',

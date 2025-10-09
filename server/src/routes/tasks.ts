@@ -57,6 +57,11 @@ router.get('/:taskId/stream', async (req, res, next) => {
         return;
       }
 
+      if (event.type === 'log') {
+        send({ type: 'log', message: event.message, detail: event.detail, agent: event.agent ?? agent });
+        return;
+      }
+
       if (event.type === 'status') {
         send({ type: 'status', status: event.status, task: event.task, agent: event.agent ?? agent });
         return;
