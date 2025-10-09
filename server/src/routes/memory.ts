@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
+import { MemoryService } from '../services/MemoryService.js';
 
 const router = Router();
 
@@ -47,12 +48,8 @@ router.get('/graph', async (_req, res, next) => {
         agent_id: string;
         content: string;
         created_at: string;
-      }>(
-        `SELECT id, agent_id, content, created_at
-           FROM agent_memory
-          ORDER BY created_at DESC
-          LIMIT 200`
-      ),
+        metadata: Record<string, unknown>;
+      }>(`SELECT id, agent_id, content, metadata, created_at FROM agent_memory ORDER BY created_at DESC LIMIT 300`),
       pool.query<{
         id: string;
         agent_id: string;
@@ -84,7 +81,8 @@ router.get('/graph', async (_req, res, next) => {
       label: memory.content.length > 80 ? `${memory.content.slice(0, 77)}...` : memory.content,
       status: mapMemoryStatus(memory.created_at),
       metadata: {
-        createdAt: memory.created_at
+        createdAt: memory.created_at,
+        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
       }
     }));
 
@@ -98,24 +96,106 @@ router.get('/graph', async (_req, res, next) => {
       }
     }));
 
-    const links = [
-      ...memoriesResult.rows.map((memory) => ({
-        source: memory.agent_id,
+    const agentLinks = memoriesResult.rows.flatMap((memory) =>
+      agentsResult.rows.map((agent) => ({
+        source: agent.id,
         target: memory.id,
-        relation: 'derived',
-        strength: 0.8
-      })),
-      ...tasksResult.rows.map((task) => ({
-        source: task.agent_id,
-        target: `task-${task.id}`,
-        relation: task.status === 'completed' ? 'extends' : 'updated',
-        strength: 0.6
+        relation: agent.id === memory.agent_id ? 'derived' : 'shared',
+        strength: agent.id === memory.agent_id ? 0.9 : 0.35
       }))
-    ];
+    );
+
+    const memoryConnections: {
+      source: string;
+      target: string;
+      relation: 'similar';
+      strength: number;
+    }[] = [];
+
+    const maxConnectionsPerMemory = 6;
+    for (let i = 0; i < memoriesResult.rows.length; i += 1) {
+      const sourceMemory = memoriesResult.rows[i];
+      for (let offset = 1; offset <= maxConnectionsPerMemory; offset += 1) {
+        const target = memoriesResult.rows[i + offset];
+        if (!target) break;
+        memoryConnections.push({
+          source: sourceMemory.id,
+          target: target.id,
+          relation: 'similar',
+          strength: Math.max(0.25, 0.6 - offset * 0.05)
+        });
+      }
+    }
+
+    const taskMemoryLinks = memoriesResult.rows
+      .map((memory) => ({
+        memoryId: memory.id,
+        taskId: (memory.metadata as { taskId?: string } | null)?.taskId
+      }))
+      .filter((entry) => entry.taskId)
+      .map((entry) => ({
+        source: `task-${entry.taskId}`,
+        target: entry.memoryId,
+        relation: 'extends',
+        strength: 0.55
+      }));
+
+    const taskLinks = tasksResult.rows.map((task) => ({
+      source: task.agent_id,
+      target: `task-${task.id}`,
+      relation: task.status === 'completed' ? 'extends' : 'updated',
+      strength: task.status === 'completed' ? 0.75 : 0.5
+    }));
 
     res.json({
       nodes: [...agentNodes, ...memoryNodes, ...taskNodes],
-      links
+      links: [...agentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/stream', async (_req, res, next) => {
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    const flush = (res as unknown as { flushHeaders?: () => void }).flushHeaders;
+    if (typeof flush === 'function') {
+      flush.call(res);
+    }
+
+    let closed = false;
+    const safeEnd = () => {
+      if (closed) return;
+      closed = true;
+      res.end();
+    };
+
+    const send = (payload: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    const unsubscribe = MemoryService.on((event) => {
+      if (event.type === 'created') {
+        const memory = event.memory;
+        send({
+          type: 'memory.created',
+          memory: {
+            ...memory,
+            metadata: {
+              ...(memory.metadata ?? {}),
+              createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
+            }
+          }
+        });
+      }
+    });
+
+    _req.on('close', () => {
+      unsubscribe();
+      safeEnd();
     });
   } catch (error) {
     next(error);

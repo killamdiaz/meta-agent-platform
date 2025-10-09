@@ -42,7 +42,7 @@ export class Agent {
     return this.memoryService.listMemories(this.id, 5);
   }
 
-  async think(prompt: string) {
+  async think(prompt: string, onToken?: (token: string) => void) {
     const latestMemories = await this.loadMemory();
     const context = latestMemories.map((memory) => memory.content).join('\n');
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -54,12 +54,34 @@ export class Agent {
     }
 
     if (!openai) {
-      return [`Thought from ${this.name}:`, prompt, context].filter(Boolean).join('\n');
+      const fallback = [`Thought from ${this.name}:`, prompt, context].filter(Boolean).join('\n');
+      if (onToken) {
+        onToken(fallback);
+      }
+      return fallback;
+    }
+
+    if (onToken) {
+      const stream = await openai.chat.completions.create({
+        model: 'gpt-5',
+        messages,
+        stream: true
+      });
+      let final = '';
+      for await (const chunk of stream) {
+        const token = chunk.choices?.[0]?.delta?.content ?? '';
+        if (!token) {
+          continue;
+        }
+        final += token;
+        onToken(token);
+      }
+      return final.trim();
     }
 
     const response = await openai.chat.completions.create({
       model: 'gpt-5',
-      messages,
+      messages
     });
     const content = response.choices[0]?.message?.content ?? '';
     return content.trim();

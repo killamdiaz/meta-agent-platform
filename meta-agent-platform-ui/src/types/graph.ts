@@ -1,6 +1,6 @@
 export type NodeType = "document" | "memory" | "agent";
 export type NodeStatus = "active" | "new" | "older" | "forgotten" | "expiring";
-export type RelationType = "derived" | "updated" | "referenced" | "similar" | "extends";
+export type RelationType = "derived" | "updated" | "referenced" | "similar" | "extends" | "shared";
 
 export interface GraphNode {
   id: string;
@@ -12,6 +12,7 @@ export interface GraphNode {
     updatedAt?: string;
     tokens?: number;
     similarity?: number;
+    createdBy?: string;
   };
   x?: number;
   y?: number;

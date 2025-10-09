@@ -144,3 +144,5 @@ export const api = {
 };
 
 export type ApiClient = typeof api;
+
+export const apiBaseUrl = API_BASE;

@@ -13,7 +13,34 @@ export interface TaskRecord {
   updated_at: string;
 }
 
+export type TaskStreamEvent =
+  | {
+      type: 'status';
+      status: TaskRecord['status'];
+      task: TaskRecord;
+      agent?: AgentRecord;
+    }
+  | {
+      type: 'token';
+      token: string;
+    }
+  | {
+      type: 'complete';
+      status: 'completed';
+      task: TaskRecord;
+      agent?: AgentRecord;
+    }
+  | {
+      type: 'error';
+      status: 'error';
+      message: string;
+      task?: TaskRecord;
+      agent?: AgentRecord;
+    };
+
 export class AgentManager {
+  private taskListeners = new Map<string, Set<(event: TaskStreamEvent) => void>>();
+
   async allAgents(): Promise<AgentRecord[]> {
     const { rows } = await pool.query<AgentRecord>('SELECT * FROM agents ORDER BY created_at DESC');
     return rows;
@@ -64,6 +91,35 @@ export class AgentManager {
       [payload.name, payload.role, toolsJson, objectivesJson, payload.memory_context ?? '']
     );
     return rows[0];
+  }
+
+  onTaskEvent(taskId: string, listener: (event: TaskStreamEvent) => void) {
+    const listeners = this.taskListeners.get(taskId) ?? new Set<(event: TaskStreamEvent) => void>();
+    listeners.add(listener);
+    this.taskListeners.set(taskId, listeners);
+    return () => {
+      const current = this.taskListeners.get(taskId);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) {
+        this.taskListeners.delete(taskId);
+      }
+    };
+  }
+
+  emitTaskEvent(taskId: string, event: TaskStreamEvent) {
+    const listeners = this.taskListeners.get(taskId);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error('[agent-manager] task listener error', error);
+      }
+    }
+    if (event.type === 'complete' || event.type === 'error') {
+      this.taskListeners.delete(taskId);
+    }
   }
 
   async updateAgent(
@@ -158,7 +214,9 @@ export class AgentManager {
        RETURNING *`,
       [agentId, prompt]
     );
-    return rows[0];
+    const task = rows[0];
+    this.emitTaskEvent(task.id, { type: 'status', status: task.status as TaskRecord['status'], task });
+    return task;
   }
 
   async listTasks(status?: string) {
@@ -171,6 +229,11 @@ export class AgentManager {
     }
     const { rows } = await pool.query<TaskRecord>('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 50');
     return rows;
+  }
+
+  async getTask(id: string) {
+    const { rows } = await pool.query<TaskRecord>('SELECT * FROM tasks WHERE id = $1', [id]);
+    return rows[0] ?? null;
   }
 
   instantiate(record: AgentRecord) {
@@ -230,29 +293,55 @@ export class AgentManager {
   }
 
   async handleTask(task: TaskRecord) {
+    let agentRecord: AgentRecord | null = null;
+
     await withTransaction(async (client) => {
       await this.markTaskRunning(client, task.id);
       await this.updateAgentStatus(client, task.agent_id, 'working');
     });
 
+    task.status = 'working';
+
     try {
-      const record = await this.getAgent(task.agent_id);
-      if (!record) {
+      agentRecord = await this.getAgent(task.agent_id);
+      if (!agentRecord) {
         throw new Error(`Agent ${task.agent_id} not found`);
       }
-      const agent = this.instantiate(record);
-      const thought = await agent.think(task.prompt);
+      this.emitTaskEvent(task.id, { type: 'status', status: task.status as TaskRecord['status'], task, agent: agentRecord });
+
+      const agent = this.instantiate(agentRecord);
+      const thought = await agent.think(task.prompt, (token) => {
+        this.emitTaskEvent(task.id, { type: 'token', token });
+      });
       const action = await agent.act({ id: task.id, prompt: task.prompt }, thought);
+      const result = { thought, action };
+
       await withTransaction(async (client) => {
-        await this.markTaskCompleted(client, task.id, { thought, action });
+        await this.markTaskCompleted(client, task.id, result);
         await this.updateAgentStatus(client, task.agent_id, 'idle');
       });
+      task.status = 'completed';
+      task.result = result;
+
+      this.emitTaskEvent(task.id, { type: 'complete', status: 'completed', task, agent: agentRecord });
     } catch (error) {
+      const failure =
+        error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
+
       await withTransaction(async (client) => {
         await this.markTaskFailed(client, task.id, {
-          message: error instanceof Error ? error.message : 'unknown error'
+          message: failure
         });
         await this.updateAgentStatus(client, task.agent_id, 'error');
+      });
+      task.status = 'error';
+      task.result = { message: failure };
+      this.emitTaskEvent(task.id, {
+        type: 'error',
+        status: 'error',
+        message: failure,
+        task,
+        agent: agentRecord ?? undefined
       });
       throw error;
     }

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { GraphData, GraphNode as GraphNodeType } from "@/types/graph";
 import { Card } from "@/components/ui/card";
@@ -11,39 +11,126 @@ interface ForceGraph2DProps {
 }
 
 export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<any>();
   const [hoveredNode, setHoveredNode] = useState<GraphNodeType | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNodeType | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      setDimensions({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!fgRef.current || !dimensions.width || !dimensions.height) return;
+    if (!data.nodes.length) return;
+    const timeout = setTimeout(() => {
+      fgRef.current.zoomToFit(400, 40);
+    }, 150);
+    return () => clearTimeout(timeout);
+  }, [data, dimensions]);
+
+  const agentPalette = useMemo(
+    () => [
+      "#22d3ee",
+      "#a855f7",
+      "#f97316",
+      "#34d399",
+      "#facc15",
+      "#38bdf8",
+      "#f472b6",
+      "#c084fc",
+      "#fb7185",
+      "#818cf8",
+    ],
+    [],
+  );
+
+  const agentColors = useMemo(() => {
+    const agents = data.nodes.filter((node) => node.type === "agent");
+    const map = new Map<string, string>();
+    agents.forEach((agent, index) => {
+      map.set(agent.id, agentPalette[index % agentPalette.length]);
+    });
+    return map;
+  }, [data.nodes, agentPalette]);
+
+  const withAlpha = useCallback((hex: string, alpha: number) => {
+    if (!hex.startsWith("#") || (hex.length !== 7 && hex.length !== 4)) {
+      return hex;
+    }
+    let r: number;
+    let g: number;
+    let b: number;
+    if (hex.length === 4) {
+      r = parseInt(hex[1] + hex[1], 16);
+      g = parseInt(hex[2] + hex[2], 16);
+      b = parseInt(hex[3] + hex[3], 16);
+    } else {
+      r = parseInt(hex.slice(1, 3), 16);
+      g = parseInt(hex.slice(3, 5), 16);
+      b = parseInt(hex.slice(5, 7), 16);
+    }
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }, []);
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
 
   const getNodeColor = (node: GraphNodeType) => {
     if (node.status === "forgotten") return "#dc2626";
     if (node.status === "expiring") return "#ea580c";
     if (node.status === "new") return "#fbbf24";
     if (node.status === "older") return "#10b981";
-    
+
     switch (node.type) {
-      case "document": return "#8b5cf6";
-      case "agent": return "#14b8a6";
-      case "memory": return "#3b82f6";
-      default: return "#6b7280";
+      case "document":
+        return "#8b5cf6";
+      case "agent": {
+        const color = agentColors.get(node.id);
+        return color ?? "#14b8a6";
+      }
+      case "memory": {
+        const createdBy = node.metadata?.createdBy;
+        const agentColor = createdBy ? agentColors.get(createdBy) : undefined;
+        return agentColor ? withAlpha(agentColor, 0.75) : "#3b82f6";
+      }
+      default:
+        return "#6b7280";
     }
   };
 
   const getNodeSize = (node: GraphNodeType) => {
-    return node.type === "agent" ? 3 : node.type === "document" ? 2.5 : 2;
+    if (node.type === "agent") return 3.8;
+    if (node.type === "document") return 2.8;
+    return 2.4;
   };
 
   const getLinkColor = (link: any) => {
     switch (link.relation) {
-      case "updated": return "rgba(59, 130, 246, 0.15)";
-      case "extends": return "rgba(139, 92, 246, 0.15)";
-      case "derived": return "rgba(20, 184, 166, 0.15)";
-      case "similar": return "rgba(16, 185, 129, 0.12)";
-      default: return "rgba(100, 116, 139, 0.1)";
+      case "updated":
+        return "rgba(59, 130, 246, 0.15)";
+      case "extends":
+        return "rgba(139, 92, 246, 0.18)";
+      case "derived":
+        return "rgba(20, 184, 166, 0.2)";
+      case "similar":
+        return "rgba(16, 185, 129, 0.12)";
+      case "shared":
+        return "rgba(244, 114, 182, 0.12)";
+      default:
+        return "rgba(100, 116, 139, 0.1)";
     }
   };
-
 
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node as GraphNodeType);
@@ -72,7 +159,7 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
   };
 
   return (
-    <div className="relative h-full w-full">
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden">
       {/* Search Bar */}
       <div className="absolute top-4 right-4 z-10">
         <div className="relative w-80">
@@ -170,6 +257,15 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
                 ).length}
               </span>
             </div>
+            {selectedNode.metadata?.createdBy && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Created by:</span>
+                <span className="text-foreground">
+                  {data.nodes.find((node) => node.id === selectedNode.metadata?.createdBy)?.label ??
+                    selectedNode.metadata?.createdBy}
+                </span>
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -178,6 +274,8 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       <ForceGraph2D
         ref={fgRef}
         graphData={data}
+        width={dimensions.width}
+        height={dimensions.height}
         nodeLabel="label"
         nodeColor={(node) => getNodeColor(node as GraphNodeType)}
         nodeVal={(node) => getNodeSize(node as GraphNodeType)}
@@ -203,6 +301,19 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
           ctx.lineWidth = 0.5;
           ctx.stroke();
           
+          const matchesSearch = normalizedQuery
+            ? label?.toLowerCase().includes(normalizedQuery) ||
+              (node as any).type?.toLowerCase().includes(normalizedQuery)
+            : false;
+
+          if (matchesSearch) {
+            ctx.beginPath();
+            ctx.arc(node.x!, node.y!, nodeSize + 1.2, 0, 2 * Math.PI);
+            ctx.strokeStyle = "rgba(250, 204, 21, 0.8)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+
           // Draw label for important nodes when zoomed in
           if ((nodeSize > 2.5 || globalScale > 3) && label) {
             ctx.shadowBlur = 0;
@@ -216,7 +327,9 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
         linkColor={getLinkColor}
         linkWidth={(link: any) => link.strength * 0.8}
         linkCurvature={0.15}
-        linkDirectionalParticles={(link: any) => link.relation === "derived" ? 1 : 0}
+        linkDirectionalParticles={(link: any) =>
+          link.relation === "derived" || link.relation === "shared" ? 1 : 0
+        }
         linkDirectionalParticleWidth={1.5}
         linkDirectionalParticleSpeed={0.003}
         onNodeClick={handleNodeClick}

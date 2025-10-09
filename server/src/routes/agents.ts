@@ -125,7 +125,7 @@ router.get('/:id/memory', async (req, res, next) => {
       return;
     }
     const limit = Number(req.query.limit) || 10;
-    const [memories, taskCounts] = await Promise.all([
+    const [memoryRows, taskCounts] = await Promise.all([
       MemoryService.listMemories(id, limit),
       pool.query(
         `SELECT status, COUNT(*)::int as count
@@ -135,6 +135,16 @@ router.get('/:id/memory', async (req, res, next) => {
         [id]
       )
     ]);
+    const memories = memoryRows.map((memory) => ({
+      id: memory.id,
+      content: memory.content,
+      metadata: {
+        ...(memory.metadata ?? {}),
+        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
+      },
+      created_at: memory.created_at
+    }));
+
     res.json({
       items: memories,
       taskCounts: Object.fromEntries(taskCounts.rows.map((row) => [row.status, row.count]))

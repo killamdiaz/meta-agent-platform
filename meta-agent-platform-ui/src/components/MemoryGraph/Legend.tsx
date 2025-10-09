@@ -106,6 +106,10 @@ export function Legend({ data }: LegendProps) {
               <div className="w-8 h-0.5 bg-atlas-glow/50" style={{ borderTop: "1px dashed" }} />
               <span className="text-foreground">Doc similarity</span>
             </div>
+            <div className="flex items-center gap-2 text-xs">
+              <div className="w-8 h-0.5 bg-pink-400/70" />
+              <span className="text-foreground">Shared memory links</span>
+            </div>
           </div>
         </div>
 
@@ -126,6 +130,10 @@ export function Legend({ data }: LegendProps) {
             <div className="flex items-center gap-2 text-xs">
               <div className="w-8 h-0.5 bg-green-400" />
               <span className="text-foreground">Derives</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <div className="w-8 h-0.5 bg-pink-400" />
+              <span className="text-foreground">Shared pool</span>
             </div>
           </div>
         </div>
