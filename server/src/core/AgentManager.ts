@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db.js';
 import { Agent, type AgentRecord } from './Agent.js';
 import { MemoryService } from '../services/MemoryService.js';
+import type { FetchResult } from '../services/InternetAccessModule.js';
 import { metaController } from './MetaController.js';
 
 export interface TaskRecord {
@@ -71,6 +72,51 @@ export class AgentManager {
     } catch {
       return null;
     }
+  }
+
+  private static deriveResearchQueries(text: string) {
+    const queries = new Set<string>();
+    const patterns: RegExp[] = [
+      /research(?:\s+(?:on|about))?\s+([^.;\n]+)/gi,
+      /look\s+up\s+([^.;\n]+)/gi,
+      /find\s+(?:information|info)\s+(?:on|about)\s+([^.;\n]+)/gi,
+      /what\s+can\s+you\s+tell\s+me\s+about\s+([^.?\n]+)/gi,
+      /who\s+is\s+([^.?\n]+)/gi,
+    ];
+
+    for (const pattern of patterns) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(text)) !== null) {
+        const candidate = match[1]?.trim();
+        if (candidate) {
+          queries.add(candidate.replace(/^about\s+/i, '').trim());
+        }
+      }
+    }
+
+    const quoted = text.match(/"([^"]+)"/g) ?? [];
+    for (const raw of quoted) {
+      const cleaned = raw.replace(/"/g, '').trim();
+      if (cleaned) {
+        queries.add(cleaned);
+      }
+    }
+
+    const normalized = Array.from(queries)
+      .map((query) => query.replace(/[?!]+$/, '').slice(0, 160).trim())
+      .filter((query) => query.length > 0);
+
+    if (normalized.length === 0) {
+      const lowered = text.toLowerCase();
+      if (/(research|look up|find info|find information|investigate|analyze|what can you tell|who is|look into)/.test(lowered)) {
+        const fallback = text.replace(/@[\w-]+/g, '').trim();
+        if (fallback.length > 0) {
+          normalized.push(fallback.slice(0, 160));
+        }
+      }
+    }
+
+    return normalized.slice(0, 3);
   }
 
   async allAgents(): Promise<AgentRecord[]> {
@@ -362,7 +408,34 @@ export class AgentManager {
       let augmentedPrompt = task.prompt;
       if (agent.internetEnabled) {
         const urls = AgentManager.extractUrls(task.prompt);
+        const researchQueries = AgentManager.deriveResearchQueries(task.prompt);
         const researchNotes: string[] = [];
+        const seenSources = new Set<string>();
+
+        const appendResearchResult = (result: FetchResult) => {
+          const normalizedUrl = result.url?.split('#')[0] ?? '';
+          if (normalizedUrl && seenSources.has(normalizedUrl)) {
+            return;
+          }
+          if (normalizedUrl) {
+            seenSources.add(normalizedUrl);
+          }
+          const summary = result.summary ?? result.contentSnippet ?? '';
+          const citationLine =
+            result.citations && result.citations.length > 0 ? `Citations: ${result.citations.join(', ')}` : '';
+          const researchBlock = [
+            `Source: ${result.title?.trim() || result.url}`,
+            `URL: ${result.url}`,
+            summary ? `Summary: ${summary}` : null,
+            citationLine || null,
+          ]
+            .filter((line): line is string => Boolean(line && line.trim().length > 0))
+            .join('\n');
+
+          if (researchBlock) {
+            researchNotes.push(researchBlock);
+          }
+        };
 
         for (const url of urls) {
           this.emitTaskEvent(task.id, {
@@ -373,20 +446,7 @@ export class AgentManager {
 
           try {
             const result = await agent.fetch(url, { summarize: true, cite: true });
-            const summary = result.summary ?? result.contentSnippet ?? '';
-            const citationLine = result.citations && result.citations.length > 0 ? `Citations: ${result.citations.join(', ')}` : '';
-            const researchBlock = [
-              `Source: ${result.title?.trim() || result.url}`,
-              `URL: ${result.url}`,
-              summary ? `Summary: ${summary}` : null,
-              citationLine || null,
-            ]
-              .filter((line): line is string => Boolean(line && line.trim().length > 0))
-              .join('\n');
-
-            if (researchBlock) {
-              researchNotes.push(researchBlock);
-            }
+            appendResearchResult(result);
 
             if (result.usedFallback) {
               this.emitTaskEvent(task.id, {
@@ -428,23 +488,7 @@ export class AgentManager {
                   });
                   try {
                     const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
-                    const summary = followUp.summary ?? followUp.contentSnippet ?? '';
-                    const citationLine =
-                      followUp.citations && followUp.citations.length > 0
-                        ? `Citations: ${followUp.citations.join(', ')}`
-                        : '';
-                    const researchBlock = [
-                      `Source: ${followUp.title?.trim() || followUp.url}`,
-                      `URL: ${followUp.url}`,
-                      summary ? `Summary: ${summary}` : null,
-                      citationLine || null,
-                    ]
-                      .filter((line): line is string => Boolean(line && line.trim().length > 0))
-                      .join('\n');
-
-                    if (researchBlock) {
-                      researchNotes.push(researchBlock);
-                    }
+                    appendResearchResult(followUp);
                   } catch (followUpError) {
                     const followUpMessage =
                       followUpError instanceof Error
@@ -478,6 +522,63 @@ export class AgentManager {
                   agent: agentRecord,
                 });
               }
+            }
+          }
+        }
+
+        if (urls.length === 0 && researchQueries.length > 0) {
+          for (const query of researchQueries) {
+            this.emitTaskEvent(task.id, {
+              type: 'log',
+              message: `${agent.name} is searching the web for "${query}"...`,
+              agent: agentRecord,
+            });
+
+            try {
+              const searchResults = await agent.webSearch(query);
+              const [topResult] = searchResults;
+              if (topResult) {
+                this.emitTaskEvent(task.id, {
+                  type: 'log',
+                  message: `Following up with ${topResult.title || topResult.url}`,
+                  agent: agentRecord,
+                });
+
+                try {
+                  const followUp = await agent.fetch(topResult.url, { summarize: true, cite: true });
+                  appendResearchResult(followUp);
+                } catch (followUpError) {
+                  const followUpMessage =
+                    followUpError instanceof Error
+                      ? followUpError.message
+                      : typeof followUpError === 'string'
+                        ? followUpError
+                        : 'Unknown error';
+                  this.emitTaskEvent(task.id, {
+                    type: 'log',
+                    message: `Unable to retrieve ${topResult.url}: ${followUpMessage}`,
+                    agent: agentRecord,
+                  });
+                }
+              } else {
+                this.emitTaskEvent(task.id, {
+                  type: 'log',
+                  message: `No web results found for "${query}"`,
+                  agent: agentRecord,
+                });
+              }
+            } catch (searchError) {
+              const searchMessage =
+                searchError instanceof Error
+                  ? searchError.message
+                  : typeof searchError === 'string'
+                    ? searchError
+                    : 'Unknown error';
+              this.emitTaskEvent(task.id, {
+                type: 'log',
+                message: `Web search failed for "${query}": ${searchMessage}`,
+                agent: agentRecord,
+              });
             }
           }
         }
