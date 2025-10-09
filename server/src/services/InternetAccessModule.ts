@@ -1,5 +1,11 @@
-import axios, { AxiosHeaders, type AxiosInstance } from 'axios';
+import axios, {
+  AxiosHeaders,
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 import OpenAI from 'openai';
 import { config } from '../config.js';
 
@@ -23,6 +29,7 @@ export interface FetchResult {
   summary?: string;
   citations?: string[];
   rawHtml?: string;
+  usedFallback?: boolean;
 }
 
 export interface SearchResult {
@@ -63,7 +70,7 @@ export class InternetAccessModule {
       },
     });
 
-    this.client.interceptors.request.use((request) => {
+    this.client.interceptors.request.use((request: InternalAxiosRequestConfig) => {
       if (config.internetProxyUrl) {
         const targetUrl = request.url ?? '';
         request.baseURL = config.internetProxyUrl;
@@ -138,13 +145,93 @@ export class InternetAccessModule {
       '';
 
     const paragraphs = $('p')
-      .map((_, element) => normalizeText($(element).text()))
+      .map((_, element: AnyNode) => normalizeText($(element).text()))
       .get()
-      .filter((line) => line.length > 0);
+      .filter((line: string) => line.length > 0);
 
     const contentSnippet = normalizeText(paragraphs.slice(0, 8).join(' ')).slice(0, 1200);
 
     return { title: normalizeText(title), author: normalizeText(author), publishedAt, contentSnippet };
+  }
+
+  private toFallbackUrl(url: string) {
+    try {
+      const parsed = new URL(url);
+      const normalized = `${parsed.hostname}${parsed.pathname}${parsed.search ?? ''}`.replace(/^\/+/, '');
+      return `https://r.jina.ai/http://${normalized}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildResult(
+    originalUrl: string,
+    response: AxiosResponse,
+    options: FetchOptions,
+    usedFallback: boolean,
+  ) {
+    const headers = Object.fromEntries(Object.entries(response.headers)) as Record<
+      string,
+      string | string[] | undefined
+    >;
+    const contentType = String(headers['content-type'] ?? '');
+    const result: FetchResult = {
+      url: originalUrl,
+      status: response.status,
+      headers,
+      usedFallback,
+    };
+
+    const ensureText = (input: unknown) => {
+      if (typeof input === 'string') {
+        return input;
+      }
+      if (Buffer.isBuffer(input)) {
+        return input.toString('utf8');
+      }
+      if (input && typeof input === 'object') {
+        try {
+          return JSON.stringify(input).slice(0, 4000);
+        } catch {
+          return '';
+        }
+      }
+      return '';
+    };
+
+    if (!usedFallback && contentType.includes('text/html')) {
+      const html = ensureText(response.data ?? '');
+      const meta = this.extractMetadata(html);
+      Object.assign(result, meta, { rawHtml: html });
+
+      if (options.summarize || options.cite) {
+        const summary = await this.summarizeContent(meta.contentSnippet, originalUrl);
+        result.summary = summary;
+        if (options.cite) {
+          result.citations = [`${meta.title || originalUrl} (${originalUrl})`];
+        }
+      }
+      return result;
+    }
+
+    const bodyText = normalizeText(ensureText(response.data ?? ''));
+    if (bodyText) {
+      result.contentSnippet = bodyText.slice(0, 1200);
+      if (!result.title) {
+        result.title = bodyText.split('\n').find(Boolean)?.slice(0, 140);
+      }
+    }
+
+    if (options.summarize && result.contentSnippet) {
+      result.summary = await this.summarizeContent(result.contentSnippet, originalUrl);
+      if (options.cite) {
+        result.citations = [`${result.title || originalUrl} (${originalUrl})${usedFallback ? ' [mirror]' : ''}`];
+      }
+    } else if (options.cite) {
+      result.citations = [`${originalUrl}${usedFallback ? ' [mirror]' : ''}`];
+    }
+
+    return result;
   }
 
   async fetch(url: string, options: FetchOptions = {}): Promise<FetchResult> {
@@ -154,45 +241,44 @@ export class InternetAccessModule {
 
     const method = options.method ?? (options.data ? 'POST' : 'GET');
 
-    const response = await this.client.request({
-      url,
-      method,
-      data: options.data,
-      headers: options.headers,
-      params: options.queryParams,
-    });
+    try {
+      const response = await this.client.request({
+        url,
+        method,
+        data: options.data,
+        headers: options.headers,
+        params: options.queryParams,
+        validateStatus: (status: number) => status >= 200 && status < 400,
+      });
 
-    const headers = Object.fromEntries(Object.entries(response.headers));
-    const contentType = String(headers['content-type'] ?? '');
-    const result: FetchResult = {
-      url,
-      status: response.status,
-      headers,
-    };
-
-    if (contentType.includes('text/html')) {
-      const html = String(response.data ?? '');
-      const meta = this.extractMetadata(html);
-      Object.assign(result, meta, { rawHtml: html });
-
-      if (options.summarize || options.cite) {
-        const summary = await this.summarizeContent(meta.contentSnippet, url);
-        result.summary = summary;
-        if (options.cite) {
-          result.citations = [`${meta.title || url} (${url})`];
-        }
+      return await this.buildResult(url, response, options, false);
+    } catch (error) {
+      if (method !== 'GET') {
+        throw error;
       }
-    } else if (typeof response.data === 'string') {
-      result.contentSnippet = response.data.slice(0, 1200);
-      if (options.summarize) {
-        result.summary = await this.summarizeContent(result.contentSnippet, url);
-        if (options.cite) {
-          result.citations = [`${url}`];
-        }
+
+      const fallbackUrl = this.toFallbackUrl(url);
+      if (!fallbackUrl) {
+        throw error;
+      }
+
+      try {
+        const response = await this.client.request({
+          url: fallbackUrl,
+          method: 'GET',
+          headers: {
+            Accept: 'text/plain',
+            ...(options.headers ?? {}),
+          },
+          params: options.queryParams,
+          validateStatus: (status: number) => status >= 200 && status < 400,
+        });
+
+        return await this.buildResult(url, response, options, true);
+      } catch (fallbackError) {
+        throw fallbackError;
       }
     }
-
-    return result;
   }
 
   async crawl(url: string, depth = 1) {
@@ -210,7 +296,7 @@ export class InternetAccessModule {
     try {
       const $ = cheerio.load(root.rawHtml);
       const links = new Set<string>();
-      $('a[href]').each((_idx, element) => {
+      $('a[href]').each((_idx: number, element: AnyNode) => {
         const href = $(element).attr('href');
         if (!href) return;
         try {

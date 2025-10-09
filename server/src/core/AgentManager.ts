@@ -388,6 +388,14 @@ export class AgentManager {
               researchNotes.push(researchBlock);
             }
 
+            if (result.usedFallback) {
+              this.emitTaskEvent(task.id, {
+                type: 'log',
+                message: `Used fallback mirror to load ${url}`,
+                agent: agentRecord,
+              });
+            }
+
             this.emitTaskEvent(task.id, {
               type: 'log',
               message: `Fetched ${result.title?.trim() || result.url}`,
