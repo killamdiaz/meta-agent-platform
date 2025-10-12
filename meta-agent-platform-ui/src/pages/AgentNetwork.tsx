@@ -18,6 +18,9 @@ import { api } from "@/lib/api";
 import type { AgentRecord } from "@/types/api";
 import { useToast } from "@/components/ui/use-toast";
 import { CreateAgentDrawer } from "@/components/AgentNetwork/CreateAgentDrawer";
+import { useAgentGraphStore } from "@/store/agentGraphStore";
+import useAgentGraphStream from "@/hooks/useAgentGraphStream";
+import { cn } from "@/lib/utils";
 
 const nodeTypes = {
   start: StartNode,
@@ -49,6 +52,10 @@ export default function AgentNetwork() {
   const [showMinimap, setShowMinimap] = useState(false);
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+
+  useAgentGraphStream(true);
+  const graphAgents = useAgentGraphStore((state) => state.agents);
+  const graphLinks = useAgentGraphStore((state) => state.links);
 
   const { data: agents = [], isLoading } = useQuery({
     queryKey: ["agents"],
@@ -118,28 +125,79 @@ export default function AgentNetwork() {
         id: agent.id,
         type: "agent" as const,
         position: positions[agent.id] ?? generatePosition(index),
-        data: { name: agent.name, status: agent.status, role: agent.role },
+        data: {
+          name: agent.name,
+          status: agent.status,
+          role: agent.role,
+          isTalking: graphAgents[agent.id]?.isTalking ?? false,
+        },
         selected: selectedAgentId === agent.id,
       })),
     ];
-  }, [agents, positions, selectedAgentId]);
+  }, [agents, positions, selectedAgentId, graphAgents]);
 
-  const edges = useMemo(
-    () =>
-      agents.map((agent) => ({
+  const dynamicEdges = useMemo(() => {
+    const agentIds = new Set(agents.map((agent) => agent.id));
+    return Object.values(graphLinks)
+      .filter((link) => agentIds.has(link.source) && agentIds.has(link.target))
+      .map((link) => ({
+        id: link.id,
+        source: link.source,
+        target: link.target,
+        animated: link.isActive,
+        style: {
+          stroke: link.isActive ? "#facc15" : "#6366f1",
+          strokeWidth: link.isActive ? 3 : 1.5,
+          opacity: link.isActive ? 1 : 0.8,
+        },
+        data: { isActive: link.isActive },
+      }));
+  }, [graphLinks, agents]);
+
+  const edges = useMemo(() => {
+    const connectedTargets = new Set<string>();
+    for (const edge of dynamicEdges) {
+      connectedTargets.add(edge.target);
+    }
+
+    const baseEdges = agents
+      .filter((agent) => !connectedTargets.has(agent.id))
+      .map((agent) => ({
         id: `start-${agent.id}`,
         source: "start",
         target: agent.id,
-        animated: true,
-        style: { stroke: "#3b82f6", strokeWidth: 2 },
-      })),
-    [agents],
+        animated: false,
+        style: { stroke: "#3b82f6", strokeWidth: 1.5, opacity: 0.6 },
+      }));
+    return [...baseEdges, ...dynamicEdges];
+  }, [agents, dynamicEdges]);
+
+  const updatePosition = useCallback((node: Node) => {
+    setPositions((current) => {
+      const previous = current[node.id];
+      const nextPosition = { x: node.position.x, y: node.position.y };
+      if (previous && previous.x === nextPosition.x && previous.y === nextPosition.y) {
+        return current;
+      }
+      return { ...current, [node.id]: nextPosition };
+    });
+  }, []);
+
+  const onNodeDrag = useCallback(
+    (_event: any, node: Node) => {
+      if (node.id === "start") return;
+      updatePosition(node);
+    },
+    [updatePosition],
   );
 
-  const onNodeDragStop = useCallback((_event: any, node: Node) => {
-    if (node.id === "start") return;
-    setPositions((current) => ({ ...current, [node.id]: { x: node.position.x, y: node.position.y } }));
-  }, []);
+  const onNodeDragStop = useCallback(
+    (_event: any, node: Node) => {
+      if (node.id === "start") return;
+      updatePosition(node);
+    },
+    [updatePosition],
+  );
 
   const onPaneClick = useCallback(() => {
     selectAgent(null);
@@ -155,6 +213,7 @@ export default function AgentNetwork() {
         <ReactFlow
           nodes={nodes}
           edges={edges}
+          onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
           onPaneClick={onPaneClick}
           onMove={onMove}
@@ -192,13 +251,29 @@ export default function AgentNetwork() {
         </Button>
       </div>
 
-      <ConfigPanel
-        agent={selectedAgent}
-        onDelete={(id) => deleteAgentMutation.mutateAsync(id)}
-        onUpdate={(id, updates) => updateAgentMutation.mutateAsync({ id, updates })}
-        isDeleting={deleteAgentMutation.isPending}
-        isSaving={updateAgentMutation.isPending}
-      />
+      <div
+        className={cn(
+          "relative flex-shrink-0 overflow-hidden transition-all duration-500 ease-out",
+          selectedAgent ? "w-[400px] max-w-[400px]" : "w-0 max-w-0 pointer-events-none"
+        )}
+      >
+        <div
+          className={cn(
+            "h-full transform transition-transform duration-500 ease-out",
+            selectedAgent ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"
+          )}
+        >
+          {selectedAgent && (
+            <ConfigPanel
+              agent={selectedAgent}
+              onDelete={(id) => deleteAgentMutation.mutateAsync(id)}
+              onUpdate={(id, updates) => updateAgentMutation.mutateAsync({ id, updates })}
+              isDeleting={deleteAgentMutation.isPending}
+              isSaving={updateAgentMutation.isPending}
+            />
+          )}
+        </div>
+      </div>
 
       <CreateAgentDrawer
         open={isCreateOpen}

@@ -1,15 +1,15 @@
 import { Handle, Position } from 'reactflow';
-import { Play } from 'lucide-react';
+import { BrainCircuit } from 'lucide-react';
 
 export function StartNode() {
   return (
-    <div className="px-6 py-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 hover:border-emerald-500/40 transition-colors">
-      <Play className="h-4 w-4 text-emerald-500" />
-      <span className="text-sm font-medium text-emerald-500">Start</span>
+    <div className="px-6 py-3 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center gap-2 hover:border-purple-400/60 transition-colors shadow-sm shadow-purple-500/20">
+      <BrainCircuit className="h-4 w-4 text-purple-400" />
+      <span className="text-sm font-semibold text-purple-200">Meta Cortex</span>
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-3 !h-3 !bg-emerald-500 !border-2 !border-emerald-500/20"
+        className="!w-3 !h-3 !bg-purple-400 !border-2 !border-purple-500/40"
       />
     </div>
   );

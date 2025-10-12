@@ -50,7 +50,6 @@ export class InternetAccessModule {
     'pinterest.com',
     'quora.com',
     'link.springer.com',
-    'medium.com',
     'blogspot.com',
     'tumblr.com',
     'fandom.com',

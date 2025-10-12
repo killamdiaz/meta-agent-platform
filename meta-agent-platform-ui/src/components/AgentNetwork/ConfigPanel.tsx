@@ -14,9 +14,11 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { AgentRecord } from "@/types/api";
+import type { AgentRecord, AgentConfigField } from "@/types/api";
 import { useAgentStore } from "@/store/agentStore";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Trash2, AlertCircle, CheckCircle2 } from "lucide-react";
+import DynamicAgentConfigForm from "./DynamicAgentConfigForm";
+import { useToast } from "@/components/ui/use-toast";
 
 interface ConfigPanelProps {
   agent: AgentRecord | null;
@@ -44,6 +46,16 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
   const [error, setError] = useState<string | null>(null);
   const [localSaving, setLocalSaving] = useState(false);
   const [localDeleting, setLocalDeleting] = useState(false);
+  const [configSchema, setConfigSchema] = useState<AgentConfigField[]>([]);
+  const [configValues, setConfigValues] = useState<Record<string, unknown>>({});
+  const [configType, setConfigType] = useState<string>("");
+  const [configSummary, setConfigSummary] = useState<string>("");
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configMessage, setConfigMessage] = useState<string | null>(null);
+  const [configErrorMsg, setConfigErrorMsg] = useState<string | null>(null);
+  const [configInferenceLoading, setConfigInferenceLoading] = useState(false);
+
+  const { toast } = useToast();
 
   useEffect(() => {
     if (!agent) {
@@ -67,6 +79,12 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
     setStatus(agent.status ?? "idle");
     setInternetAccess(Boolean(agent.internet_access_enabled));
     setError(null);
+    setConfigSchema(agent.config?.schema ?? []);
+    setConfigValues(agent.config?.values ?? {});
+    setConfigType(agent.config?.agentType ?? agent.agent_type ?? agent.role);
+    setConfigSummary(agent.config?.summary ?? agent.config_summary ?? "");
+    setConfigMessage(null);
+    setConfigErrorMsg(null);
   }, [agent]);
 
   const { data: memoryData, isFetching: memoryLoading } = useQuery({
@@ -75,6 +93,27 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
     enabled: Boolean(agent?.id),
     refetchInterval: 30_000,
   });
+
+  const {
+    data: configData,
+    isFetching: configLoading,
+    refetch: refetchConfig,
+  } = useQuery({
+    queryKey: ["agent-config", agent?.id],
+    queryFn: () => api.fetchAgentConfig(agent!.id),
+    enabled: Boolean(agent?.id),
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!configData) return;
+    setConfigSchema(configData.configSchema ?? []);
+    setConfigValues(configData.values ?? {});
+    setConfigType(configData.agentType ?? agent?.agent_type ?? agent?.role ?? "");
+    setConfigSummary(configData.description ?? agent?.config_summary ?? "");
+    setConfigMessage(null);
+    setConfigErrorMsg(null);
+  }, [configData, agent?.agent_type, agent?.config_summary, agent?.role]);
 
   const tools = useMemo(() => {
     if (!agent?.tools) return [];
@@ -121,16 +160,60 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
     }
   };
 
+  const handleSaveConfig = async () => {
+    if (!agent || configSchema.length === 0) return;
+    setConfigSaving(true);
+    setConfigMessage(null);
+    setConfigErrorMsg(null);
+    try {
+      await api.updateAgentConfig(agent.id, {
+        agentType: configType || agent.agent_type || agent.role,
+        summary: configSummary || agent.config_summary || agent.role,
+        schema: configSchema,
+        values: configValues,
+      });
+      setConfigMessage("Configuration saved");
+      toast({ title: "Configuration updated", description: `${agent.name} can now use its tools.` });
+      await refetchConfig();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update configuration";
+      setConfigErrorMsg(message);
+      toast({ title: "Configuration error", description: message, variant: "destructive" });
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const handleGenerateConfig = async () => {
+    if (!agent) return;
+    setConfigInferenceLoading(true);
+    setConfigErrorMsg(null);
+    setConfigMessage(null);
+    try {
+      const template = await api.generateAgentConfig(agent.role || agent.name, {
+        existingAgents: [],
+        preferredTools: Object.keys(agent.tools ?? {}),
+      });
+      setConfigSchema(template.configSchema ?? []);
+      setConfigValues(template.defaults ?? {});
+      setConfigType(template.agentType ?? agent.agent_type ?? agent.role);
+      setConfigSummary(template.description ?? agent.config_summary ?? "");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to infer configuration";
+      setConfigErrorMsg(message);
+      toast({ title: "Could not infer config", description: message, variant: "destructive" });
+    } finally {
+      setConfigInferenceLoading(false);
+    }
+  };
+
   if (!agent) {
-    return (
-      <div className="w-[380px] bg-card border-l border-border p-6 flex items-center justify-center">
-        <p className="text-sm text-muted-foreground">Select an agent to configure</p>
-      </div>
-    );
+    return null;
   }
 
   return (
-    <div className="w-[380px] bg-card border-l border-border p-6 space-y-6 overflow-y-auto">
+    <div className="w-[380px] h-full bg-card border-l border-border flex flex-col">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-lg font-semibold text-foreground">{agent.name}</h2>
@@ -232,6 +315,60 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
         )}
       </div>
 
+      <div className="space-y-3 rounded-lg border border-border/60 bg-muted/10 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <Label className="text-sm">Tool configuration</Label>
+            <p className="text-xs text-muted-foreground">Store sandbox credentials securely per agent.</p>
+          </div>
+          {(configLoading || configInferenceLoading) && (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          )}
+        </div>
+
+        {configErrorMsg && (
+          <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+            <AlertCircle className="h-3.5 w-3.5" />
+            <span>{configErrorMsg}</span>
+          </div>
+        )}
+
+        {configSchema.length === 0 ? (
+          <Button
+            variant="outline"
+            onClick={handleGenerateConfig}
+            disabled={configInferenceLoading}
+            className="w-full"
+          >
+            {configInferenceLoading ? "Detecting configuration..." : "Detect configuration fields"}
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <DynamicAgentConfigForm
+              schema={configSchema}
+              values={configValues}
+              onChange={(next) => {
+                setConfigValues(next);
+                setConfigMessage(null);
+              }}
+              defaults={undefined}
+              disabled={configSaving}
+            />
+            <div className="flex items-center justify-between">
+              {configMessage && (
+                <span className="inline-flex items-center gap-2 text-xs text-atlas-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {configMessage}
+                </span>
+              )}
+              <Button onClick={handleSaveConfig} disabled={configSaving}>
+                {configSaving ? "Saving..." : "Save configuration"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <Separator />
 
       <div className="space-y-2">
@@ -268,9 +405,12 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      <Button onClick={handleSave} disabled={localSaving || isSaving} className="w-full">
-        {localSaving || isSaving ? "Saving..." : "Save changes"}
-      </Button>
+      </div>
+      <div className="border-t border-border/60 p-4">
+        <Button onClick={handleSave} disabled={localSaving || isSaving} className="w-full">
+          {localSaving || isSaving ? "Saving..." : "Save changes"}
+        </Button>
+      </div>
     </div>
   );
 }

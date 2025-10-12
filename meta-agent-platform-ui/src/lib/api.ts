@@ -1,11 +1,13 @@
 import type {
   AgentRecord,
   AgentMemoryResponse,
+  AgentConfigField,
   BuildAgentResult,
   CommandResponse,
   GraphDataResponse,
   OverviewInsights,
   TaskRecord,
+  MultiAgentSession,
 } from '@/types/api';
 
 const API_BASE = (() => {
@@ -74,6 +76,12 @@ export const api = {
     objectives: string[];
     memory_context?: string;
     internet_access_enabled?: boolean;
+    config?: {
+      agentType: string;
+      summary?: string;
+      schema: AgentConfigField[];
+      values: Record<string, unknown>;
+    };
   }): Promise<AgentRecord> {
     return request('/agents', {
       method: 'POST',
@@ -86,6 +94,12 @@ export const api = {
     tools?: Record<string, unknown>;
     status?: AgentRecord['status'];
     internet_access_enabled?: boolean;
+    config?: {
+      agentType?: string;
+      summary?: string;
+      schema?: AgentConfigField[];
+      values?: Record<string, unknown>;
+    };
   }): Promise<AgentRecord | null> {
     return request(`/agents/${id}`, {
       method: 'PATCH',
@@ -136,12 +150,58 @@ export const api = {
     });
   },
 
+  generateAgentConfig(description: string, options?: { preferredTools?: string[]; existingAgents?: string[] }) {
+    return request('/agent-config/schema', {
+      method: 'POST',
+      body: JSON.stringify({ description, ...options }),
+    }) as Promise<{
+      agentType: string;
+      description: string;
+      configSchema: AgentConfigField[];
+      defaults?: Record<string, unknown>;
+    }>;
+  },
+
+  fetchAgentConfig(agentId: string) {
+    return request(`/agent-config/${agentId}`) as Promise<{
+      agentId: string;
+      agentType: string;
+      description: string;
+      configSchema: AgentConfigField[];
+      defaults?: Record<string, unknown>;
+      values: Record<string, unknown>;
+    }>;
+  },
+
+  updateAgentConfig(agentId: string, payload: {
+    agentType: string;
+    summary?: string;
+    schema: AgentConfigField[];
+    values: Record<string, unknown>;
+  }) {
+    return request(`/agent-config/${agentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
   fetchOverviewInsights(): Promise<OverviewInsights> {
     return request('/insights/overview');
   },
 
   fetchMemoryGraph(): Promise<GraphDataResponse> {
     return request('/memory/graph');
+  },
+
+  runMultiAgentSession(prompt: string): Promise<MultiAgentSession> {
+    return request('/multi-agent/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    });
+  },
+
+  fetchMultiAgentMemory(): Promise<MultiAgentSession['memory']> {
+    return request('/multi-agent/memory');
   },
 };
 

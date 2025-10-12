@@ -3,8 +3,36 @@ import { z } from 'zod';
 import { agentManager } from '../core/AgentManager.js';
 import { MemoryService } from '../services/MemoryService.js';
 import { pool } from '../db.js';
+import type { AgentRecord } from '../core/Agent.js';
 
 const router = Router();
+
+const configFieldSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  type: z.enum(['string', 'number', 'boolean', 'password', 'textarea', 'select']),
+  required: z.boolean().optional(),
+  secure: z.boolean().optional(),
+  options: z.array(z.string().min(1)).optional(),
+  description: z.string().optional(),
+  placeholder: z.string().optional(),
+  tooltip: z.string().optional(),
+  defaultValue: z.unknown().optional()
+});
+
+const createConfigSchema = z.object({
+  agentType: z.string().min(1),
+  summary: z.string().optional(),
+  schema: z.array(configFieldSchema).min(1),
+  values: z.record(z.unknown()).default({})
+});
+
+const updateConfigSchema = z.object({
+  agentType: z.string().optional(),
+  summary: z.string().optional(),
+  schema: z.array(configFieldSchema).optional(),
+  values: z.record(z.unknown()).optional()
+});
 
 const createAgentSchema = z.object({
   name: z.string().min(2),
@@ -12,7 +40,8 @@ const createAgentSchema = z.object({
   tools: z.record(z.boolean()).default({}),
   objectives: z.array(z.string()).default([]),
   memory_context: z.string().optional(),
-  internet_access_enabled: z.boolean().optional()
+  internet_access_enabled: z.boolean().optional(),
+  config: createConfigSchema.optional()
 });
 
 router.post('/', async (req, res, next) => {
@@ -24,9 +53,10 @@ router.post('/', async (req, res, next) => {
       tools: payload.tools,
       objectives: payload.objectives,
       memory_context: payload.memory_context ?? '',
-      internet_access_enabled: payload.internet_access_enabled ?? false
+      internet_access_enabled: payload.internet_access_enabled ?? false,
+      config: payload.config
     });
-    res.status(201).json(agent);
+    res.status(201).json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -35,7 +65,7 @@ router.post('/', async (req, res, next) => {
 router.get('/', async (_req, res, next) => {
   try {
     const agents = await agentManager.allAgents();
-    res.json({ items: agents });
+    res.json({ items: agents.map(serializeAgent) });
   } catch (error) {
     next(error);
   }
@@ -49,7 +79,7 @@ router.get('/:id', async (req, res, next) => {
       res.status(404).json({ message: 'Agent not found' });
       return;
     }
-    res.json(agent);
+    res.json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -63,11 +93,27 @@ const updateAgentSchema = z
     objectives: z.union([z.array(z.string()), z.string(), z.null()]).optional(),
     memory_context: z.string().optional(),
     status: z.enum(['idle', 'working', 'error']).optional(),
-    internet_access_enabled: z.boolean().optional()
+    internet_access_enabled: z.boolean().optional(),
+    config: updateConfigSchema.optional()
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: 'Provide at least one field to update'
   });
+
+const serializeAgent = (agent: AgentRecord) => {
+  const { config_schema, config_data, config_summary, agent_type, ...rest } = agent;
+  return {
+    ...rest,
+    agent_type,
+    config_summary,
+    config: {
+      agentType: agent_type ?? agent.role,
+      summary: config_summary ?? undefined,
+      schema: Array.isArray(config_schema) ? config_schema : [],
+      values: config_data ?? {}
+    }
+  };
+};
 
 router.patch('/:id', async (req, res, next) => {
   try {
@@ -78,7 +124,7 @@ router.patch('/:id', async (req, res, next) => {
       res.status(404).json({ message: 'Agent not found' });
       return;
     }
-    res.json(agent);
+    res.json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -171,7 +217,8 @@ router.patch('/:id/status', async (req, res, next) => {
       return;
     }
     await agentManager.setAgentStatus(id, body.status);
-    res.json({ ...agent, status: body.status });
+    const refreshed = await agentManager.getAgent(id);
+    res.json(serializeAgent({ ...(refreshed ?? agent), status: body.status }));
   } catch (error) {
     next(error);
   }

@@ -4,6 +4,7 @@ import { MemoryService } from '../services/MemoryService.js';
 import { internetAccessModule, type FetchOptions, type FetchResult, type SearchResult } from '../services/InternetAccessModule.js';
 import { MailQueueService } from '../services/MailQueueService.js';
 import { metaController } from './MetaController.js';
+import type { AgentConfigField } from '../services/AgentConfigService.js';
 
 const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
@@ -17,6 +18,10 @@ export interface AgentRecord {
   tools: Record<string, unknown>;
   internet_access_enabled: boolean;
   settings: Record<string, unknown>;
+  agent_type?: string | null;
+  config_schema?: AgentConfigField[] | null;
+  config_data?: Record<string, unknown> | null;
+  config_summary?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +54,20 @@ export class Agent {
 
   get settings() {
     return this.record.settings ?? {};
+  }
+
+  get configuration() {
+    return this.record.config_data ?? {};
+  }
+
+  get configurationSchema(): AgentConfigField[] {
+    return Array.isArray(this.record.config_schema)
+      ? (this.record.config_schema as AgentConfigField[])
+      : [];
+  }
+
+  get agentType() {
+    return this.record.agent_type ?? this.record.role;
   }
 
   async loadMemory() {

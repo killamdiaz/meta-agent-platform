@@ -70,6 +70,18 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS agent_configs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      summary TEXT,
+      schema JSONB NOT NULL,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(agent_id)
+    );
+
     CREATE TABLE IF NOT EXISTS controller_approvals (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
@@ -94,6 +106,7 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_sent_messages_status ON sent_messages(status);
     CREATE INDEX IF NOT EXISTS idx_controller_approvals_status ON controller_approvals(status);
+    CREATE INDEX IF NOT EXISTS idx_agent_configs_agent_id ON agent_configs(agent_id);
   `);
 }
 

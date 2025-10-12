@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain } from "lucide-react";
+import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,9 @@ const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
   { name: "Overview", href: "/", icon: LayoutDashboard },
+  { name: "Collaboration Lab", href: "/multi-agent", icon: Users },
   { name: "Command Console", href: "/console", icon: MessageSquare },
+  { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
 ];
 
 const bottomNav = [

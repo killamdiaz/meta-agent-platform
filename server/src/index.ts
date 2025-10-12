@@ -13,7 +13,10 @@ import { coordinator } from './core/Coordinator.js';
 import insightsRoute from './routes/insights.js';
 import memoryRoute from './routes/memory.js';
 import metaControllerRoute from './routes/metaController.js';
+import multiAgentRoute from './routes/multiAgent.js';
 import { metaController } from './core/MetaController.js';
+import { toolRuntime } from './multiAgent/ToolRuntime.js';
+import agentConfigRoute from './routes/agentConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,9 +36,11 @@ async function bootstrap() {
   app.use('/tasks', tasksRoute);
   app.use('/commands', commandsRoute);
   app.use('/agent-builder', agentBuilderRoute);
+  app.use('/agent-config', agentConfigRoute);
   app.use('/insights', insightsRoute);
   app.use('/memory', memoryRoute);
   app.use('/meta-controller', metaControllerRoute);
+  app.use('/multi-agent', multiAgentRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
@@ -44,8 +49,10 @@ async function bootstrap() {
       '/tasks',
       '/commands',
       '/agent-builder',
+      '/agent-config',
       '/insights',
       '/memory',
+      '/multi-agent',
       '/meta-controller',
       '/healthz'
     ];
@@ -74,6 +81,7 @@ async function bootstrap() {
 
   await metaController.getMetaAgentId();
   coordinator.start();
+  await toolRuntime.initialise();
 }
 
 bootstrap().catch((error) => {

@@ -14,7 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import type { BuildAgentResult } from "@/types/api";
+import type { AgentConfigField, BuildAgentResult } from "@/types/api";
+import { useToast } from "@/components/ui/use-toast";
+import { api } from "@/lib/api";
+import DynamicAgentConfigForm from "./DynamicAgentConfigForm";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface CreateAgentDrawerProps {
   open: boolean;
@@ -54,6 +59,20 @@ export function CreateAgentDrawer({
   const [naturalLoading, setNaturalLoading] = useState(false);
   const [naturalError, setNaturalError] = useState<string | null>(null);
   const [result, setResult] = useState<BuildAgentResult | null>(null);
+  const [configTemplate, setConfigTemplate] = useState<{
+    agentType: string;
+    description: string;
+    configSchema: AgentConfigField[];
+    defaults?: Record<string, unknown>;
+  } | null>(null);
+  const [configValues, setConfigValues] = useState<Record<string, unknown>>({});
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSuccess, setConfigSuccess] = useState(false);
+
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const resetState = () => {
     setManualName("");
@@ -69,6 +88,12 @@ export function CreateAgentDrawer({
     setNaturalLoading(false);
     setNaturalError(null);
     setResult(null);
+    setConfigTemplate(null);
+    setConfigValues({});
+    setConfigLoading(false);
+    setConfigSaving(false);
+    setConfigError(null);
+    setConfigSuccess(false);
     setTab("natural");
   };
 
@@ -126,19 +151,88 @@ export function CreateAgentDrawer({
     }
 
     setNaturalError(null);
+    setConfigTemplate(null);
+    setConfigValues({});
+    setConfigError(null);
+    setConfigSuccess(false);
     setNaturalLoading(true);
+    setConfigLoading(true);
     try {
-      const generated = await onGenerateFromPrompt(prompt.trim(), {
+      const description = prompt.trim();
+      const generated = await onGenerateFromPrompt(description, {
         persist: true,
         spawn: spawnNow || undefined,
         creator: "atlas-ui",
       });
       setResult(generated);
+      try {
+        const template = await api.generateAgentConfig(description);
+        setConfigTemplate(template);
+        const defaults = template.defaults ?? {};
+        const existingConfig = generated.savedAgent?.config?.values ?? {};
+        setConfigValues({ ...defaults, ...existingConfig });
+      } catch (configErr) {
+        const message = configErr instanceof Error ? configErr.message : "Failed to infer configuration";
+        setConfigTemplate(null);
+        setConfigError(message);
+      }
     } catch (error) {
       setResult(null);
-      setNaturalError(error instanceof Error ? error.message : "Failed to generate agent");
+      const message = error instanceof Error ? error.message : "Failed to generate agent";
+      setNaturalError(message);
+      setConfigError(message);
     } finally {
       setNaturalLoading(false);
+      setConfigLoading(false);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (!configTemplate || configTemplate.configSchema.length === 0) {
+      toast({
+        title: "No configuration to save",
+        description: "Generate a configuration schema first.",
+      });
+      return;
+    }
+    setConfigError(null);
+    setConfigSaving(true);
+    setConfigSuccess(false);
+    try {
+      const payload = {
+        agentType: configTemplate.agentType,
+        summary: configTemplate.description,
+        schema: configTemplate.configSchema,
+        values: configValues,
+      };
+
+      let targetAgentId = result?.savedAgent?.id ?? null;
+      if (!targetAgentId) {
+        const spec = result?.spec;
+        const created = await api.createAgent({
+          name: spec?.name ?? "Generated Agent",
+          role: spec?.description ?? "Autonomous Agent",
+          tools: {},
+          objectives: spec?.goals ?? [],
+          memory_context: spec?.description ?? "",
+          internet_access_enabled: false,
+          config: payload,
+        });
+        targetAgentId = created.id;
+        setResult((previous) => (previous ? { ...previous, savedAgent: created } : previous));
+      } else {
+        await api.updateAgent(targetAgentId, { config: payload });
+      }
+
+      setConfigSuccess(true);
+      toast({ title: "Configuration saved", description: "Credentials stored for this agent." });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save configuration";
+      setConfigError(message);
+      toast({ title: "Configuration error", description: message, variant: "destructive" });
+    } finally {
+      setConfigSaving(false);
     }
   };
 
@@ -216,6 +310,55 @@ export function CreateAgentDrawer({
             <Button onClick={handleGenerate} disabled={naturalLoading} className="w-full">
               {naturalLoading ? "Generating..." : "Generate agent"}
             </Button>
+
+            {configLoading && (
+              <p className="text-xs text-muted-foreground">Inferring required configuration…</p>
+            )}
+
+            {configError && !configLoading && !configTemplate && (
+              <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                <AlertCircle className="h-3.5 w-3.5" />
+                <span>{configError}</span>
+              </div>
+            )}
+
+            {configTemplate && (
+              <div className="space-y-4 rounded-xl border border-border bg-muted/20 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Tool configuration</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Provide credentials and defaults so the agent can act autonomously.
+                  </p>
+                </div>
+                {configError && (
+                  <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span>{configError}</span>
+                  </div>
+                )}
+                <DynamicAgentConfigForm
+                  schema={configTemplate.configSchema}
+                  values={configValues}
+                  defaults={configTemplate.defaults}
+                  disabled={configSaving}
+                  onChange={(nextValues) => {
+                    setConfigValues(nextValues);
+                    setConfigSuccess(false);
+                  }}
+                />
+                <div className="flex items-center justify-between">
+                  {configSuccess && (
+                    <span className="inline-flex items-center gap-2 text-xs text-atlas-success">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Saved
+                    </span>
+                  )}
+                  <Button onClick={handleSaveConfig} disabled={configSaving} className="ml-auto">
+                    {configSaving ? "Saving..." : "Save configuration"}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {result && (
               <div className="space-y-4 rounded-xl border border-border bg-muted/20 p-4">

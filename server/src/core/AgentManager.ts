@@ -5,6 +5,8 @@ import { MemoryService } from '../services/MemoryService.js';
 import type { FetchResult } from '../services/InternetAccessModule.js';
 import { metaController } from './MetaController.js';
 import { webTool, type WebToolResult } from '../tools/webTool.js';
+import { agentConfigService, type AgentConfigField } from '../services/AgentConfigService.js';
+import { toolRuntime } from '../multiAgent/ToolRuntime.js';
 
 export interface TaskRecord {
   id: string;
@@ -144,12 +146,23 @@ export class AgentManager {
   }
 
   async allAgents(): Promise<AgentRecord[]> {
-    const { rows } = await pool.query<AgentRecord>('SELECT * FROM agents ORDER BY created_at DESC');
+    const { rows } = await pool.query<AgentRecord>(
+      `SELECT a.*, ac.agent_type, ac.summary AS config_summary, ac.schema AS config_schema, ac.config AS config_data
+         FROM agents a
+         LEFT JOIN agent_configs ac ON ac.agent_id = a.id
+        ORDER BY a.created_at DESC`
+    );
     return rows;
   }
 
   async getAgent(id: string): Promise<AgentRecord | null> {
-    const { rows } = await pool.query<AgentRecord>('SELECT * FROM agents WHERE id = $1', [id]);
+    const { rows } = await pool.query<AgentRecord>(
+      `SELECT a.*, ac.agent_type, ac.summary AS config_summary, ac.schema AS config_schema, ac.config AS config_data
+         FROM agents a
+         LEFT JOIN agent_configs ac ON ac.agent_id = a.id
+        WHERE a.id = $1`,
+      [id]
+    );
     return rows[0] ?? null;
   }
 
@@ -160,6 +173,12 @@ export class AgentManager {
     objectives: unknown;
     memory_context?: string;
     internet_access_enabled?: boolean;
+    config?: {
+      agentType: string;
+      summary?: string;
+      schema: AgentConfigField[];
+      values?: Record<string, unknown>;
+    };
   }) {
     let toolsJson: string;
     if (typeof payload.tools === 'string') {
@@ -200,7 +219,21 @@ export class AgentManager {
         payload.internet_access_enabled ?? false,
       ]
     );
-    return rows[0];
+    const agent = rows[0];
+    if (payload.config) {
+      const record = await agentConfigService.upsertAgentConfig(agent.id, {
+        agentType: payload.config.agentType,
+        summary: payload.config.summary,
+        schema: payload.config.schema,
+        values: payload.config.values ?? {},
+      });
+      agent.agent_type = record.agentType;
+      agent.config_schema = record.configSchema;
+      agent.config_data = record.values;
+      agent.config_summary = record.description;
+      await toolRuntime.refreshAgent(agent.id);
+    }
+    return agent;
   }
 
   onTaskEvent(taskId: string, listener: (event: TaskStreamEvent) => void) {
@@ -242,6 +275,12 @@ export class AgentManager {
       memory_context?: string;
       status?: string;
       internet_access_enabled?: boolean;
+      config?: {
+        agentType?: string;
+        summary?: string;
+        schema?: AgentConfigField[];
+        values?: Record<string, unknown>;
+      };
     }
   ) {
     const assignments: string[] = [];
@@ -306,21 +345,46 @@ export class AgentManager {
       values.push(updates.internet_access_enabled);
     }
 
-    if (assignments.length === 0) {
-      return this.getAgent(id);
+    let agent: AgentRecord | null = null;
+
+    if (assignments.length > 0) {
+      const query = `
+        UPDATE agents
+           SET ${assignments.join(', ')}, updated_at = NOW()
+         WHERE id = $${assignments.length + 1}
+         RETURNING *`;
+      const { rows } = await pool.query<AgentRecord>(query, [...values, id]);
+      agent = rows[0] ?? null;
+    } else {
+      agent = await this.getAgent(id);
     }
 
-    const query = `
-      UPDATE agents
-         SET ${assignments.join(', ')}, updated_at = NOW()
-       WHERE id = $${assignments.length + 1}
-       RETURNING *`;
-    const { rows } = await pool.query<AgentRecord>(query, [...values, id]);
-    return rows[0] ?? null;
+    if (!agent) {
+      return null;
+    }
+
+    if (updates.config) {
+      const schema = updates.config.schema ?? (Array.isArray(agent.config_schema) ? agent.config_schema : []);
+      const valuesPayload = updates.config.values ?? (agent.config_data ?? {});
+      const record = await agentConfigService.upsertAgentConfig(id, {
+        agentType: updates.config.agentType ?? agent.agent_type ?? agent.role,
+        summary: updates.config.summary ?? agent.config_summary ?? agent.role,
+        schema,
+        values: valuesPayload,
+      });
+      agent.agent_type = record.agentType;
+      agent.config_schema = record.configSchema;
+      agent.config_data = record.values;
+      agent.config_summary = record.description;
+      await toolRuntime.refreshAgent(id);
+    }
+
+    return agent;
   }
 
   async deleteAgent(id: string) {
     await pool.query('DELETE FROM agents WHERE id = $1', [id]);
+    toolRuntime.removeAgent(id);
   }
 
   async addTask(agentId: string, prompt: string) {
@@ -428,6 +492,11 @@ export class AgentManager {
 
       const agent = this.instantiate(agentRecord);
       await metaController.onTaskStarted(task, { id: agent.id, name: agent.name });
+      this.emitTaskEvent(task.id, {
+        type: 'log',
+        message: `${agent.name} received your request. Laying out a plan...`,
+        agent: agentRecord,
+      });
 
       let augmentedPrompt = task.prompt;
       const researchQueries = agent.internetEnabled ? AgentManager.deriveResearchQueries(task.prompt) : [];

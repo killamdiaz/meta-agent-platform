@@ -1,3 +1,71 @@
+export type AgentConfigFieldType = 'string' | 'number' | 'boolean' | 'password' | 'textarea' | 'select';
+
+export interface AgentConfigField {
+  key: string;
+  label: string;
+  type: AgentConfigFieldType;
+  required?: boolean;
+  secure?: boolean;
+  options?: string[];
+  description?: string;
+  placeholder?: string;
+  tooltip?: string;
+  defaultValue?: unknown;
+}
+
+export interface AgentConfig {
+  agentType: string;
+  summary?: string;
+  schema: AgentConfigField[];
+  values: Record<string, unknown>;
+}
+
+export interface AgentGraphNodeSnapshot {
+  id: string;
+  name: string;
+  role: string;
+  connections: string[];
+  isTalking: boolean;
+}
+
+export interface AgentGraphLinkSnapshot {
+  id: string;
+  source: string;
+  target: string;
+  isActive: boolean;
+  lastMessageId?: string;
+  activeUntil?: number;
+}
+
+export interface AgentGraphSnapshot {
+  agents: AgentGraphNodeSnapshot[];
+  links: AgentGraphLinkSnapshot[];
+}
+
+export interface AgentMessageEvent {
+  id: string;
+  from: string;
+  to: string;
+  type: 'question' | 'response' | 'task';
+  content: string;
+  metadata?: Record<string, unknown>;
+  timestamp: string;
+}
+
+export interface AgentStateChangeEvent {
+  agentId: string;
+  isTalking?: boolean;
+  message?: AgentMessageEvent;
+  direction?: 'incoming' | 'outgoing';
+  linkActivity?: {
+    targetId: string;
+    direction: 'incoming' | 'outgoing';
+    isActive: boolean;
+    messageId?: string;
+    timestamp: string;
+  };
+}
+
 export interface AgentRecord {
   id: string;
   name: string;
@@ -8,6 +76,9 @@ export interface AgentRecord {
   memory_context: string;
   internet_access_enabled: boolean;
   settings: Record<string, unknown>;
+  agent_type?: string | null;
+  config_summary?: string | null;
+  config?: AgentConfig;
   created_at: string;
   updated_at: string;
 }
@@ -102,3 +173,41 @@ export interface GraphDataResponse {
   links: import('./graph').GraphLink[];
 }
 
+export interface MultiAgent {
+  id: string;
+  name: string;
+  role: string;
+  purpose: string;
+}
+
+export interface MultiAgentMessage {
+  id: string;
+  from: string;
+  to: string;
+  content: string;
+  timestamp: string;
+  reasoning?: string;
+  references?: string[];
+}
+
+export interface MultiAgentSession {
+  sessionId: string;
+  userPrompt: string;
+  agents: MultiAgent[];
+  messages: MultiAgentMessage[];
+  memory: {
+    agents: Record<
+      string,
+      {
+        shortTerm: string[];
+        longTerm: string[];
+      }
+    >;
+    shared: {
+      id: string;
+      content: string;
+      agentsInvolved: string[];
+      timestamp: string;
+    }[];
+  };
+}
