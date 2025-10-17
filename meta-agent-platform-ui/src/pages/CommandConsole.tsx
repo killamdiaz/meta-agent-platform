@@ -2,10 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu, Plus, Mic, Sparkles, Loader2, X, Trash2, Clock } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { AutomationDrawer } from "@/components/AutomationDrawer";
 import { api, apiBaseUrl } from "@/lib/api";
-import type { AgentRecord, CommandResponse, TaskRecord } from "@/types/api";
+import type {
+  AgentRecord,
+  CommandResponse,
+  TaskRecord,
+  AutomationBuilderResponse,
+  AutomationPipeline,
+  AutomationNode,
+  AutomationEdge,
+} from "@/types/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useCommandHistory, type HistoryMessage } from "@/hooks/useCommandHistory";
+import { useAutomationPipelineStore } from "@/store/automationPipelineStore";
 
 type MessageRole = "user" | "assistant" | "system";
 
@@ -29,11 +40,28 @@ const createMessageId = () => {
   return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 };
 
+const createAutomationSessionId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `automation-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
 const createMessage = (payload: Omit<Message, "id" | "createdAt">): Message => ({
   id: createMessageId(),
   createdAt: new Date().toISOString(),
   ...payload,
 });
+
+const formatPipelineSummary = (pipeline: AutomationPipeline) => {
+  const lines = [];
+  const title = pipeline.name ? `Automation: ${pipeline.name}` : "Automation pipeline updated";
+  lines.push(title);
+  pipeline.nodes.forEach((node, index) => {
+    lines.push(`${index + 1}. [${node.type}] ${node.agent}`);
+  });
+  return lines.join("\n");
+};
 
 const getDisplayValue = (message: Message) => (message.streamContent ?? message.content ?? "").trim();
 
@@ -241,6 +269,16 @@ export default function CommandConsole() {
   const [input, setInput] = useState("");
   const taskStreams = useRef<Map<string, EventSource>>(new Map());
   const [historyOpen, setHistoryOpen] = useState(false);
+  const automationSessionIdRef = useRef<string>(createAutomationSessionId());
+  const automationEventSourceRef = useRef<EventSource | null>(null);
+  const automationActiveRef = useRef(false);
+  const [automationDrawerOpen, setAutomationDrawerOpen] = useState(false);
+  const [automationPipeline, setAutomationPipeline] = useState<AutomationPipeline | null>(null);
+  const [awaitingKey, setAwaitingKey] = useState<{ agent: string; prompt: string } | null>(null);
+  const [automationKeyInput, setAutomationKeyInput] = useState("");
+  const [automationStatusMessage, setAutomationStatusMessage] = useState<string | null>(null);
+  const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
+  const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
 
   const { sessions, currentSessionId, createSession, selectSession, deleteSession, updateSessionMessages } =
     useCommandHistory();
@@ -315,6 +353,276 @@ export default function CommandConsole() {
     taskStreams.current.forEach((source) => source.close());
     taskStreams.current.clear();
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (automationPipeline) {
+      setSharedPipeline(automationPipeline, automationSessionIdRef.current);
+    }
+  }, [automationPipeline, setSharedPipeline]);
+
+  const resetAutomationContext = useCallback(
+    (options?: { endSession?: boolean }) => {
+      const previousSessionId = automationSessionIdRef.current;
+      automationEventSourceRef.current?.close();
+      automationEventSourceRef.current = null;
+      automationActiveRef.current = false;
+      setAutomationDrawerOpen(false);
+      setAutomationPipeline(null);
+      setAwaitingKey(null);
+      setAutomationStatusMessage(null);
+      setAutomationKeyInput("");
+      if (options?.endSession) {
+        api.endAutomationSession(previousSessionId).catch((error) => {
+          console.warn("[automation] failed to end session", error);
+        });
+      }
+      automationSessionIdRef.current = createAutomationSessionId();
+      clearSharedPipeline();
+    },
+    [clearSharedPipeline],
+  );
+
+  useEffect(
+    () => () => {
+      resetAutomationContext({ endSession: true });
+    },
+    [resetAutomationContext],
+  );
+
+  const upsertAutomationNode = useCallback((node: AutomationNode) => {
+    setAutomationPipeline((prev) => {
+      const fallback: AutomationPipeline = prev ?? { name: undefined, nodes: [], edges: [] };
+      const existingIndex = fallback.nodes.findIndex((item) => item.id === node.id);
+      const nextNodes =
+        existingIndex >= 0
+          ? fallback.nodes.map((item, index) => (index === existingIndex ? { ...item, ...node } : item))
+          : [...fallback.nodes, node];
+      return {
+        ...fallback,
+        nodes: nextNodes,
+      };
+    });
+  }, []);
+
+  const upsertAutomationEdge = useCallback((edge: AutomationEdge) => {
+    setAutomationPipeline((prev) => {
+      const fallback: AutomationPipeline = prev ?? { name: undefined, nodes: [], edges: [] };
+      const exists = fallback.edges.some((item) => item.from === edge.from && item.to === edge.to);
+      if (exists) {
+        return fallback;
+      }
+      return {
+        ...fallback,
+        edges: [...fallback.edges, edge],
+      };
+    });
+  }, []);
+
+  const ensureAutomationStream = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (automationEventSourceRef.current) return;
+    const sessionId = automationSessionIdRef.current;
+    const url = `${apiBaseUrl}/automation-builder/events?sessionId=${encodeURIComponent(sessionId)}`;
+    const source = new window.EventSource(url);
+    automationEventSourceRef.current = source;
+
+    const handleDrawer = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as { isOpen: boolean };
+        setAutomationDrawerOpen(payload.isOpen);
+      } catch (error) {
+        console.error("[automation] failed to parse drawer event", error);
+      }
+    };
+
+    const handlePipeline = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as AutomationPipeline;
+        setAutomationPipeline(payload);
+      } catch (error) {
+        console.error("[automation] failed to parse pipeline event", error);
+      }
+    };
+
+    const handleNode = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as AutomationNode;
+        upsertAutomationNode(payload);
+      } catch (error) {
+        console.error("[automation] failed to parse node event", error);
+      }
+    };
+
+    const handleEdge = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as AutomationEdge;
+        upsertAutomationEdge(payload);
+      } catch (error) {
+        console.error("[automation] failed to parse edge event", error);
+      }
+    };
+
+    const handleStatus = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as { status: string; detail?: Record<string, unknown> };
+        const detail = payload.detail ? ` (${JSON.stringify(payload.detail)})` : "";
+        setAutomationStatusMessage(`${payload.status}${detail}`);
+      } catch (error) {
+        console.error("[automation] failed to parse status event", error);
+      }
+    };
+
+    source.addEventListener("drawer", handleDrawer);
+    source.addEventListener("pipeline", handlePipeline);
+    source.addEventListener("node", handleNode);
+    source.addEventListener("edge", handleEdge);
+    source.addEventListener("status", handleStatus);
+
+    source.onerror = (error) => {
+      console.error("[automation] stream error", error);
+      source.close();
+      automationEventSourceRef.current = null;
+    };
+  }, [upsertAutomationEdge, upsertAutomationNode]);
+
+  const handleAutomationResponse = useCallback(
+    (result: AutomationBuilderResponse) => {
+      automationActiveRef.current = true;
+      ensureAutomationStream();
+      if (result.pipeline) {
+        setAutomationPipeline(result.pipeline);
+        setAutomationDrawerOpen(true);
+      }
+      setAutomationStatusMessage(result.status);
+      switch (result.status) {
+        case "success": {
+          setAwaitingKey(null);
+          if (result.pipeline) {
+            const summary = formatPipelineSummary(result.pipeline);
+            setMessages((prev) => [...prev, createMessage({ role: "assistant", content: summary })]);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              createMessage({ role: "assistant", content: "Automation pipeline updated." }),
+            ]);
+          }
+          break;
+        }
+        case "awaiting_key": {
+          const agent = result.agent ?? "automation step";
+          const prompt = result.prompt ?? "This step requires a secure credential.";
+          setAwaitingKey({ agent, prompt });
+          setMessages((prev) => [
+            ...prev,
+            createMessage({ role: "assistant", content: `${prompt} (${agent})` }),
+          ]);
+          break;
+        }
+        case "saved": {
+          setAwaitingKey(null);
+          const name = result.name ?? "automation";
+          setMessages((prev) => [
+            ...prev,
+            createMessage({ role: "assistant", content: `Automation saved as “${name}”.` }),
+          ]);
+          break;
+        }
+        case "loaded": {
+          setAwaitingKey(null);
+          if (result.pipeline) {
+            const summary = formatPipelineSummary(result.pipeline);
+            setMessages((prev) => [...prev, createMessage({ role: "assistant", content: summary })]);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              createMessage({ role: "assistant", content: "Automation loaded successfully." }),
+            ]);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [ensureAutomationStream],
+  );
+
+  const tryHandleAutomation = useCallback(
+    async (prompt: string): Promise<boolean> => {
+      const sessionId = automationSessionIdRef.current;
+      try {
+        const result = await api.sendAutomationMessage({ sessionId, message: prompt });
+        handleAutomationResponse(result);
+        return true;
+      } catch (error) {
+        let message = error instanceof Error ? error.message : "Automation builder failed.";
+        try {
+          const parsed = JSON.parse(message) as { message?: string };
+          if (parsed && typeof parsed.message === "string") {
+            message = parsed.message;
+          }
+        } catch {
+          // ignore
+        }
+        const fallbackCues = ["describe what should happen", "could not determine the trigger", "describe where to send"];
+        const normalized = message.toLowerCase();
+        const shouldFallback = !automationActiveRef.current && fallbackCues.some((cue) => normalized.includes(cue));
+        if (shouldFallback) {
+          return false;
+        }
+        setMessages((prev) => [
+          ...prev,
+          createMessage({ role: "system", content: `Automation builder error: ${message}` }),
+        ]);
+        toast({
+          title: "Automation builder error",
+          description: message,
+          variant: "destructive",
+        });
+        return true;
+      }
+    },
+    [handleAutomationResponse, toast],
+  );
+
+  const handleSubmitAutomationKey = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!awaitingKey) return;
+      const value = automationKeyInput.trim();
+      if (!value) {
+        toast({
+          title: "Provide the requested credential",
+          description: "Enter the required key to continue building the automation.",
+        });
+        return;
+      }
+      const sessionId = automationSessionIdRef.current;
+      const agent = awaitingKey.agent;
+      const secret = value;
+      setAutomationKeyInput("");
+      try {
+        const result = await api.provideAutomationKey({ sessionId, agent, value: secret });
+        handleAutomationResponse(result);
+      } catch (error) {
+        let message = error instanceof Error ? error.message : "Failed to submit credential.";
+        try {
+          const parsed = JSON.parse(message) as { message?: string };
+          if (parsed && typeof parsed.message === "string") {
+            message = parsed.message;
+          }
+        } catch {
+          // ignore parse errors
+        }
+        setMessages((prev) => [
+          ...prev,
+          createMessage({ role: "system", content: `Credential submission failed: ${message}` }),
+        ]);
+        toast({ title: "Credential submission failed", description: message, variant: "destructive" });
+      }
+    },
+    [automationKeyInput, awaitingKey, handleAutomationResponse, toast],
+  );
 
   const handleTaskStreamEvent = useCallback(
     (taskId: string, payload: TaskStreamPayload) => {
@@ -557,16 +865,18 @@ export default function CommandConsole() {
     const userMessage = createMessage({ role: "user", content: trimmed });
     setMessages((prev) => [...prev, userMessage]);
 
-    try {
-      const { command } = buildCommand(trimmed, agents);
-      await commandMutation.mutateAsync(command);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to process command";
-      setMessages((prev) => [...prev, createMessage({ role: "system", content: `Error: ${message}` })]);
-      toast({ title: "Unable to route message", description: message, variant: "destructive" });
-    } finally {
-      setInput("");
+    const handledByAutomation = await tryHandleAutomation(trimmed);
+    if (!handledByAutomation) {
+      try {
+        const { command } = buildCommand(trimmed, agents);
+        await commandMutation.mutateAsync(command);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to process command";
+        setMessages((prev) => [...prev, createMessage({ role: "system", content: `Error: ${message}` })]);
+        toast({ title: "Unable to route message", description: message, variant: "destructive" });
+      }
     }
+    setInput("");
   };
 
   const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -578,35 +888,45 @@ export default function CommandConsole() {
 
   const handleSelectSession = useCallback(
     (sessionId: string) => {
+      resetAutomationContext({ endSession: true });
       hydratedSessionRef.current = null;
       selectSession(sessionId);
       setHistoryOpen(false);
     },
-    [selectSession],
+    [resetAutomationContext, selectSession],
   );
 
   const handleNewChat = useCallback(() => {
+    resetAutomationContext({ endSession: true });
     hydratedSessionRef.current = null;
     createSession();
     setMessages([]);
     setHistoryOpen(false);
-  }, [createSession]);
+  }, [createSession, resetAutomationContext]);
 
   const handleDeleteSession = useCallback(
     (sessionId: string) => {
+      resetAutomationContext({ endSession: true });
       hydratedSessionRef.current = null;
       deleteSession(sessionId);
       if (sessionId === currentSessionId) {
         setMessages([]);
       }
     },
-    [deleteSession, currentSessionId],
+    [currentSessionId, deleteSession, resetAutomationContext],
   );
 
   const currentTitle = currentSession?.title ?? "New conversation";
 
   return (
     <div className="relative flex h-screen">
+      <AutomationDrawer
+        open={automationDrawerOpen}
+        onClose={() => setAutomationDrawerOpen(false)}
+        pipeline={automationPipeline}
+        sessionId={automationSessionIdRef.current}
+        status={automationStatusMessage ?? undefined}
+      />
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-80 border-r border-border/60 bg-background/95 backdrop-blur-xl transition-transform duration-300 ${
           historyOpen ? "translate-x-0" : "-translate-x-full"
@@ -802,7 +1122,32 @@ export default function CommandConsole() {
         </div>
 
         <div className="bg-background p-6">
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-4xl mx-auto space-y-4">
+            {awaitingKey && (
+              <div className="rounded-2xl border border-border/60 bg-card/60 p-4 backdrop-blur-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-atlas-glow">
+                      Secure credential required {awaitingKey.agent ? `(${awaitingKey.agent})` : ""}
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">{awaitingKey.prompt}</p>
+                  </div>
+                </div>
+                <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleSubmitAutomationKey}>
+                  <Input
+                    type="password"
+                    value={automationKeyInput}
+                    onChange={(event) => setAutomationKeyInput(event.target.value)}
+                    placeholder="Paste credential securely"
+                    className="flex-1"
+                    required
+                  />
+                  <Button type="submit" className="sm:w-auto">
+                    Submit
+                  </Button>
+                </form>
+              </div>
+            )}
             <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[28px] hover:border-border transition-colors">
               <div className="flex items-center gap-3 px-5 py-4">
                 <Button

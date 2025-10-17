@@ -83,6 +83,54 @@ export interface AgentRecord {
   updated_at: string;
 }
 
+export interface AutomationRecord {
+  id: string;
+  name: string;
+  automation_type: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AutomationNodeType = "Trigger" | "Processor" | "Action";
+
+export interface AutomationNode {
+  id: string;
+  type: AutomationNodeType;
+  agent: string;
+  config: Record<string, unknown>;
+}
+
+export interface AutomationEdge {
+  from: string;
+  to: string;
+}
+
+export interface AutomationPipeline {
+  name?: string;
+  nodes: AutomationNode[];
+  edges: AutomationEdge[];
+}
+
+export type AutomationBuilderStatus = "success" | "awaiting_key" | "saved" | "loaded";
+
+export interface AutomationBuilderResponse {
+  status: AutomationBuilderStatus;
+  pipeline?: AutomationPipeline;
+  agent?: string;
+  prompt?: string;
+  name?: string;
+}
+
+export interface AutomationDrawerEvent {
+  isOpen: boolean;
+}
+
+export interface AutomationStatusEvent {
+  status: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface TaskRecord {
   id: string;
   agent_id: string;
@@ -99,6 +147,8 @@ export interface MemoryEntry {
   content: string;
   metadata: Record<string, unknown>;
   created_at: string;
+  memory_type: 'short_term' | 'long_term';
+  expires_at: string | null;
 }
 
 export interface AgentMemoryResponse {

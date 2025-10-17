@@ -13,6 +13,8 @@ export interface GraphNode {
     tokens?: number;
     similarity?: number;
     createdBy?: string;
+    memoryType?: 'short_term' | 'long_term';
+    expiresAt?: string | null;
   };
   x?: number;
   y?: number;

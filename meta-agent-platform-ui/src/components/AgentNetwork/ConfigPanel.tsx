@@ -377,14 +377,44 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
           {memoryLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
         <div className="space-y-3">
-          {(memoryData?.items ?? []).slice(0, 5).map((entry) => (
-            <div key={entry.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
-              <p className="text-xs text-foreground line-clamp-3">{entry.content}</p>
-              <p className="text-[10px] text-muted-foreground mt-2">
-                {new Date(entry.created_at).toLocaleString()}
-              </p>
-            </div>
-          ))}
+          {(memoryData?.items ?? []).slice(0, 5).map((entry) => {
+            const retention = (entry.metadata?.retention ?? {}) as {
+              reason?: unknown;
+              expiresAt?: unknown;
+            };
+            const retentionReason = typeof retention.reason === "string" ? retention.reason : null;
+            const expiresAtRaw =
+              entry.memory_type === "short_term"
+                ? (typeof retention.expiresAt === "string" ? retention.expiresAt : entry.expires_at)
+                : null;
+            const expiresAtDate = expiresAtRaw ? new Date(expiresAtRaw) : null;
+
+            const badgeStyles =
+              entry.memory_type === "short_term"
+                ? "bg-sky-500/15 text-sky-300 border border-sky-500/40"
+                : "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30";
+
+            return (
+              <div key={entry.id} className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-xs text-foreground line-clamp-3">{entry.content}</p>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${badgeStyles}`}>
+                    {entry.memory_type === "short_term" ? "STM" : "LTM"}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1 text-[10px] text-muted-foreground">
+                  <span>
+                    {entry.memory_type === "short_term"
+                      ? expiresAtDate
+                        ? `Expires ${expiresAtDate.toLocaleString()}`
+                        : "Short-term context"
+                      : `Captured ${new Date(entry.created_at).toLocaleString()}`}
+                  </span>
+                  {retentionReason && <span className="italic">Reason: {retentionReason}</span>}
+                </div>
+              </div>
+            );
+          })}
           {(!memoryData || memoryData.items.length === 0) && !memoryLoading && (
             <p className="text-xs text-muted-foreground">No memory captured yet.</p>
           )}

@@ -67,6 +67,19 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const selectedMetadataRecord = selectedNode?.metadata as Record<string, unknown> | undefined;
+  const selectedMemoryType =
+    selectedNode?.type === "memory"
+      ? (selectedMetadataRecord?.memoryType as "short_term" | "long_term" | undefined)
+      : undefined;
+  const selectedMemoryExpiresAt =
+    selectedNode?.type === "memory" && typeof selectedMetadataRecord?.expiresAt === "string"
+      ? (selectedMetadataRecord?.expiresAt as string)
+      : null;
+  const selectedRetention =
+    selectedNode?.type === "memory" && selectedMetadataRecord
+      ? ((selectedMetadataRecord["retention"] ?? {}) as { reason?: unknown })
+      : undefined;
 
   const sanitizedData = useMemo(() => {
     const total = Math.max(1, data.nodes.length);
@@ -277,6 +290,13 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
         return "#ffffff";
       }
       case "memory": {
+        const memoryType = node.metadata?.memoryType;
+        if (memoryType === "short_term") {
+          return "#38bdf8";
+        }
+        if (memoryType === "long_term") {
+          return "#14b8a6";
+        }
         const createdBy = node.metadata?.createdBy;
         const agentColor = createdBy ? agentColors.get(createdBy) : undefined;
         return agentColor ? withAlpha(agentColor, 0.75) : "#3b82f6";
@@ -473,6 +493,34 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
                     selectedNode.metadata?.createdBy}
                 </span>
               </div>
+            )}
+            {selectedNode.type === "memory" && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Memory type:</span>
+                  <span className="text-foreground capitalize">
+                    {selectedMemoryType === "short_term"
+                      ? "Short-term"
+                      : selectedMemoryType === "long_term"
+                      ? "Long-term"
+                      : "Unknown"}
+                  </span>
+                </div>
+                {selectedMemoryExpiresAt && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expires:</span>
+                    <span className="text-foreground">
+                      {new Date(selectedMemoryExpiresAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {selectedRetention?.reason && typeof selectedRetention.reason === "string" && (
+                  <div>
+                    <span className="text-muted-foreground block">Retention logic:</span>
+                    <span className="text-foreground italic">{selectedRetention.reason}</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </Card>

@@ -1,8 +1,10 @@
 import { agentBroker, agentRegistry } from './index.js';
-import { instantiateToolAgent, type ToolAgentOptions } from '../tools/index.js';
+import { createAgent } from '../core/agent-factory.js';
+import type { ToolAgentOptions } from '../tools/index.js';
 import { pool } from '../db.js';
 import type { AgentRecord } from '../core/Agent.js';
 import type { BaseAgent } from './BaseAgent.js';
+import { logAgentEvent } from '../core/agent-logger.js';
 
 interface ToolAgentRow extends AgentRecord {
   agent_type: string;
@@ -37,6 +39,9 @@ export class ToolRuntime {
       agentRegistry.unregister(agentId);
       this.agents.delete(agentId);
       this.agentMetadata.delete(agentId);
+      logAgentEvent(agentId, 'Tool agent disposed for refresh', {
+        metadata: { stage: 'dispose', source: 'tool-runtime' },
+      });
     }
     const { rows } = await pool.query<ToolAgentRow>(
       `SELECT a.*, ac.agent_type, ac.config AS config_data
@@ -73,6 +78,9 @@ export class ToolRuntime {
     agentRegistry.unregister(agentId);
     this.agents.delete(agentId);
     this.agentMetadata.delete(agentId);
+    logAgentEvent(agentId, 'Tool agent removed from runtime', {
+      metadata: { stage: 'dispose', source: 'tool-runtime' },
+    });
   }
 
   private async spawn(row: ToolAgentRow) {
@@ -87,10 +95,16 @@ export class ToolRuntime {
       config,
       description: row.memory_context,
     };
-    const agent = instantiateToolAgent(row.agent_type, options);
+    const agent = await createAgent(row.agent_type, {
+      ...options,
+      agentType: row.agent_type,
+    });
     agentRegistry.register(agent);
     this.agents.set(row.id, agent);
     this.agentMetadata.set(row.id, { agentType: row.agent_type });
+    logAgentEvent(agent.id, `Tool agent registered (type=${row.agent_type})`, {
+      metadata: { stage: 'register', agentType: row.agent_type, source: 'tool-runtime' },
+    });
   }
 }
 

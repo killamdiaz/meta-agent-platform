@@ -2,12 +2,15 @@ import type {
   AgentRecord,
   AgentMemoryResponse,
   AgentConfigField,
+  AutomationRecord,
   BuildAgentResult,
   CommandResponse,
   GraphDataResponse,
   OverviewInsights,
   TaskRecord,
   MultiAgentSession,
+  AutomationBuilderResponse,
+  AutomationPipeline,
 } from '@/types/api';
 
 const API_BASE = (() => {
@@ -202,6 +205,44 @@ export const api = {
 
   fetchMultiAgentMemory(): Promise<MultiAgentSession['memory']> {
     return request('/multi-agent/memory');
+  },
+
+  listAutomations(): Promise<{ items: AutomationRecord[] }> {
+    return request('/automations');
+  },
+
+  createAutomation(payload: { name: string; automation_type: string; metadata?: Record<string, unknown> }): Promise<AutomationRecord> {
+    return request('/automations', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateAutomation(id: string, payload: { name: string; automation_type: string; metadata?: Record<string, unknown> }): Promise<AutomationRecord> {
+    return request(`/automations/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  sendAutomationMessage(payload: { sessionId: string; message: string }): Promise<AutomationBuilderResponse> {
+    return request('/automation-builder/message', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  provideAutomationKey(payload: { sessionId: string; agent: string; value: string }): Promise<AutomationBuilderResponse> {
+    return request('/automation-builder/key', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  endAutomationSession(sessionId: string): Promise<void> {
+    return request(`/automation-builder/session/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    });
   },
 };
 

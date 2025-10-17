@@ -18,10 +18,22 @@ export function GraphNode({ node, onClick, onHover }: GraphNodeProps) {
     if (node.status === "older") return "#f97316";
     
     switch (node.type) {
-      case "document": return "#a855f7";
-      case "agent": return "#22c55e";
-      case "memory": return "#00d4ff";
-      default: return "#00d4ff";
+      case "document":
+        return "#a855f7";
+      case "agent":
+        return "#22c55e";
+      case "memory": {
+        const memoryType = node.metadata?.memoryType;
+        if (memoryType === "short_term") {
+          return "#38bdf8";
+        }
+        if (memoryType === "long_term") {
+          return "#14b8a6";
+        }
+        return "#00d4ff";
+      }
+      default:
+        return "#00d4ff";
     }
   };
 
