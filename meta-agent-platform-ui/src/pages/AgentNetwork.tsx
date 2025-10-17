@@ -9,18 +9,23 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, Workflow, ChevronDown } from "lucide-react";
 import { useAgentStore } from "@/store/agentStore";
 import { StartNode } from "@/components/AgentNetwork/StartNode";
 import { AgentNode } from "@/components/AgentNetwork/AgentNode";
 import { ConfigPanel } from "@/components/AgentNetwork/ConfigPanel";
 import { api } from "@/lib/api";
-import type { AgentRecord } from "@/types/api";
+import type { AgentRecord, AutomationRecord, AutomationPipeline } from "@/types/api";
 import { useToast } from "@/components/ui/use-toast";
 import { CreateAgentDrawer } from "@/components/AgentNetwork/CreateAgentDrawer";
 import { useAgentGraphStore } from "@/store/agentGraphStore";
 import useAgentGraphStream from "@/hooks/useAgentGraphStream";
 import { cn } from "@/lib/utils";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card } from "@/components/ui/card";
+import { useAutomationPipelineStore } from "@/store/automationPipelineStore";
 
 const nodeTypes = {
   start: StartNode,
@@ -30,20 +35,36 @@ const nodeTypes = {
 const START_NODE: Node = {
   id: "start",
   type: "start",
-  position: { x: 120, y: 200 },
+  position: { x: 0, y: 0 },
   data: { label: "Start" },
   draggable: false,
 };
 
-const generatePosition = (index: number): { x: number; y: number } => {
-  const spacingX = 260;
-  const spacingY = 160;
-  const col = index % 3;
-  const row = Math.floor(index / 3);
+const generatePosition = (index: number, total: number): { x: number; y: number } => {
+  if (total <= 0) return { x: 0, y: 0 };
+  const minRadius = 320;
+  const desiredSpacing = 180;
+  const radius = Math.max(minRadius, (total * desiredSpacing) / (2 * Math.PI));
+  const angle = (index / total) * 2 * Math.PI;
   return {
-    x: 360 + col * spacingX,
-    y: 120 + row * spacingY,
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
   };
+};
+
+const extractPipelineFromMetadata = (metadata: Record<string, unknown> | null | undefined): AutomationPipeline | null => {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+  const pipelineCandidate = (metadata as { pipeline?: unknown }).pipeline;
+  if (!pipelineCandidate || typeof pipelineCandidate !== "object") {
+    return null;
+  }
+  try {
+    return JSON.parse(JSON.stringify(pipelineCandidate)) as AutomationPipeline;
+  } catch {
+    return null;
+  }
 };
 
 export default function AgentNetwork() {
@@ -52,6 +73,15 @@ export default function AgentNetwork() {
   const [showMinimap, setShowMinimap] = useState(false);
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [automationName, setAutomationName] = useState("");
+  const [automationType, setAutomationType] = useState("multi-agent");
+  const [automationOpen, setAutomationOpen] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [selectedAutomationId, setSelectedAutomationId] = useState<string>("__new");
+  const automationPipeline = useAutomationPipelineStore((state) => state.pipeline);
+  const automationSessionId = useAutomationPipelineStore((state) => state.sessionId);
+  const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
+  const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
 
   useAgentGraphStream(true);
   const graphAgents = useAgentGraphStore((state) => state.agents);
@@ -68,9 +98,10 @@ export default function AgentNetwork() {
     setPositions((current) => {
       const next = { ...current };
       let changed = false;
+      const totalAgents = agents.length;
       agents.forEach((agent, index) => {
         if (!next[agent.id]) {
-          next[agent.id] = generatePosition(index);
+          next[agent.id] = generatePosition(index, totalAgents);
           changed = true;
         }
       });
@@ -124,7 +155,7 @@ export default function AgentNetwork() {
       ...agents.map((agent, index) => ({
         id: agent.id,
         type: "agent" as const,
-        position: positions[agent.id] ?? generatePosition(index),
+        position: positions[agent.id] ?? generatePosition(index, agents.length),
         data: {
           name: agent.name,
           status: agent.status,
@@ -207,6 +238,166 @@ export default function AgentNetwork() {
     setShowMinimap(true);
   }, []);
 
+  const createAutomationMutation = useMutation({
+    mutationFn: (payload: { name: string; type: string; metadata: Record<string, unknown> }) =>
+      api.createAutomation({ name: payload.name, automation_type: payload.type, metadata: payload.metadata }),
+    onSuccess: (record) => {
+      toast({ title: "Automation created", description: record.name });
+      queryClient.invalidateQueries({ queryKey: ["automations"] });
+      setSelectedAutomationId(record.id);
+      setAutomationName(record.name);
+      setAutomationType(record.automation_type);
+      setAutomationOpen(false);
+      setIsEditingName(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to create automation",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateAutomationMutation = useMutation({
+    mutationFn: (payload: { id: string; name: string; type: string; metadata: Record<string, unknown> }) =>
+      api.updateAutomation(payload.id, {
+        name: payload.name,
+        automation_type: payload.type,
+        metadata: payload.metadata,
+      }),
+    onSuccess: (record) => {
+      toast({ title: "Automation updated", description: record.name });
+      queryClient.invalidateQueries({ queryKey: ["automations"] });
+      setAutomationName(record.name);
+      setAutomationType(record.automation_type);
+      setAutomationOpen(false);
+      setIsEditingName(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update automation",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const automationsQuery = useQuery({
+    queryKey: ["automations"],
+    queryFn: async () => {
+      const response = await api.listAutomations();
+      return response.items;
+    },
+    initialData: [] as AutomationRecord[],
+  });
+
+  const handleSelectAutomation = useCallback(
+    (value: string) => {
+      if (value === "__new") {
+        setAutomationName("");
+        setAutomationType("multi-agent");
+        setSelectedAutomationId("__new");
+        clearSharedPipeline();
+        return;
+      }
+      const automation = automationsQuery.data?.find((entry) => entry.id === value);
+      if (!automation) {
+        return;
+      }
+      setSelectedAutomationId(automation.id);
+      setAutomationName(automation.name);
+      setAutomationType(automation.automation_type);
+      const pipeline = extractPipelineFromMetadata(automation.metadata);
+      if (pipeline) {
+        setSharedPipeline(pipeline);
+      } else {
+        clearSharedPipeline();
+        toast({
+          title: "No pipeline stored",
+          description: "This automation does not have a saved pipeline yet.",
+        });
+      }
+    },
+    [automationsQuery.data, clearSharedPipeline, setSharedPipeline, toast],
+  );
+
+  const isSavingAutomation = createAutomationMutation.isPending || updateAutomationMutation.isPending;
+
+  const handleSaveAutomation = useCallback(() => {
+    const trimmedName = automationName.trim();
+    if (trimmedName.length < 2) {
+      toast({
+        title: "Name your automation",
+        description: "Automation names must be at least two characters.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!automationPipeline) {
+      toast({
+        title: "No pipeline to save",
+        description: "Build or load an automation in the Command Console first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const metadata: Record<string, unknown> = {
+      pipeline: automationPipeline,
+    };
+    if (automationSessionId) {
+      metadata.sessionId = automationSessionId;
+    }
+    if (selectedAutomationId === "__new") {
+      createAutomationMutation.mutate({
+        name: trimmedName,
+        type: automationType,
+        metadata,
+      });
+    } else {
+      updateAutomationMutation.mutate({
+        id: selectedAutomationId,
+        name: trimmedName,
+        type: automationType,
+        metadata,
+      });
+    }
+  }, [
+    automationName,
+    automationPipeline,
+    automationSessionId,
+    automationType,
+    createAutomationMutation,
+    selectedAutomationId,
+    toast,
+    updateAutomationMutation,
+  ]);
+
+  useEffect(() => {
+    if (automationsQuery.isLoading || automationsQuery.error) return;
+    const automations = automationsQuery.data ?? [];
+    if (!automations.length) {
+      setSelectedAutomationId("__new");
+      return;
+    }
+    const selected = automations.find((automation) => automation.id === selectedAutomationId);
+    if (selected) {
+      setAutomationName((prev) => (prev.trim().length > 0 ? prev : selected.name));
+      setAutomationType(selected.automation_type);
+      return;
+    }
+    const first = automations[0];
+    setSelectedAutomationId(first.id);
+    setAutomationName(first.name);
+    setAutomationType(first.automation_type);
+    if (!automationPipeline) {
+      const pipeline = extractPipelineFromMetadata(first.metadata);
+      if (pipeline) {
+        setSharedPipeline(pipeline);
+      }
+    }
+  }, [automationPipeline, automationsQuery.data, automationsQuery.isLoading, automationsQuery.error, selectedAutomationId, setSharedPipeline]);
+
   return (
     <div className="h-screen w-full flex bg-[#0b0b0f]">
       <div className="flex-1 relative">
@@ -240,6 +431,140 @@ export default function AgentNetwork() {
             />
           )}
         </ReactFlow>
+
+        <Card className="absolute left-1/2 top-6 z-30 w-[420px] -translate-x-1/2 bg-black/40 backdrop-blur border border-white/10 shadow-lg">
+          <button
+            type="button"
+            onClick={() => setAutomationOpen((prev) => !prev)}
+            className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-white/5"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
+              <Workflow className="h-5 w-5 text-white/80" />
+            </div>
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold uppercase tracking-[0.28em] text-white/60">Automation</Label>
+                <span className="text-[11px] uppercase tracking-widest text-white/40">Alpha</span>
+              </div>
+              {isEditingName ? (
+                <Input
+                  autoFocus
+                  value={automationName}
+                  onChange={(event) => setAutomationName(event.target.value)}
+                  onBlur={() => setIsEditingName(false)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  placeholder="Atlas launch playbook"
+                  className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="w-full text-sm font-medium text-white text-left hover:text-white/80"
+                  onClick={() => setIsEditingName(true)}
+                >
+                  {automationName.trim() || "Name your automation"}
+                </button>
+              )}
+            </div>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 text-white/70 transition-transform duration-300",
+                automationOpen ? "rotate-180" : "rotate-0"
+              )}
+            />
+          </button>
+          {automationOpen && (
+            <div className="space-y-4 border-t border-white/10 px-5 py-4">
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Load existing</Label>
+                <Select value={selectedAutomationId} onValueChange={handleSelectAutomation}>
+                  <SelectTrigger className="border-white/10 bg-white/5 text-white">
+                    <SelectValue placeholder="Select automation" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-black/80 backdrop-blur border-white/10 text-white">
+                    {automationsQuery.data?.map((automation) => (
+                      <SelectItem key={automation.id} value={automation.id}>
+                        {automation.name}
+                      </SelectItem>
+                    )) ?? null}
+                    <SelectItem value="__new">New automation…</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Name</Label>
+                <Input
+                  value={automationName}
+                  onChange={(event) => setAutomationName(event.target.value)}
+                  placeholder="Atlas launch playbook"
+                  className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Template</Label>
+                <Select value={automationType} onValueChange={setAutomationType}>
+                  <SelectTrigger className="border-white/10 bg-white/5 text-white">
+                    <SelectValue placeholder="Automation type" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-black/80 backdrop-blur border-white/10 text-white">
+                    <SelectItem value="multi-agent">Multi-agent orchestration</SelectItem>
+                    <SelectItem value="tool-chain">Tool chain</SelectItem>
+                    <SelectItem value="alert">Alert & escalation</SelectItem>
+                    <SelectItem value="custom">Custom workflow</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Current pipeline</Label>
+                {automationPipeline ? (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white/80">
+                    <ol className="space-y-1 text-xs">
+                      {automationPipeline.nodes.map((node, index) => (
+                        <li key={node.id} className="flex items-center gap-2">
+                          <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/60">
+                            {index + 1}
+                          </span>
+                          <span className="font-medium text-white/90">[{node.type}]</span>
+                          <span>{node.agent}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : (
+                  <p className="text-xs text-white/60">
+                    Build an automation in the Command Console to save it here.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Button
+                  variant="ghost"
+                  className="text-white/70 hover:bg-white/10"
+                  onClick={() => setAutomationOpen(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  className="bg-white/10 hover:bg-white/20 text-white"
+                  disabled={isSavingAutomation || !automationPipeline}
+                  onClick={handleSaveAutomation}
+                >
+                  {selectedAutomationId === "__new"
+                    ? isSavingAutomation
+                      ? "Saving…"
+                      : "Save automation"
+                    : isSavingAutomation
+                    ? "Updating…"
+                    : "Update automation"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
 
         <Button
           onClick={() => setCreateOpen(true)}

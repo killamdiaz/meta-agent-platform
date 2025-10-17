@@ -78,6 +78,7 @@ export abstract class BaseAgent {
   readonly name: string;
   readonly role: string;
   readonly description?: string;
+  client: unknown = null;
 
   protected readonly broker: MessageBroker;
   protected readonly registry?: AgentRegistry;
@@ -288,7 +289,11 @@ export abstract class BaseAgent {
   }): Promise<string> {
     const systemPrompt =
       options.systemPrompt ??
-      `You are Agent ${this.id}, part of a team of collaborating AI agents working together to solve problems.`;
+      [
+        `You are Agent ${this.id}, part of a team of collaborating AI agents working together to solve problems.`,
+        'You receive both short-term and long-term memories as context—treat them as authoritative and leverage them when replying.',
+        'Do not claim you lack memory or cannot remember; instead, draw from the provided memories or ask for clarification if details are missing.',
+      ].join(' ');
     const userPromptLines = [
       `You just received a message from Agent ${options.from}:`,
       `"${options.content}"`,
@@ -319,7 +324,6 @@ export abstract class BaseAgent {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPromptLines.join('\n') },
       ],
-      temperature: 0.4,
     });
     const reply = response.choices[0]?.message?.content?.trim();
     if (!reply) {
@@ -394,6 +398,11 @@ export abstract class BaseAgent {
       to: message.to,
       from: message.from,
       metadata: message.metadata ?? {},
+      memoryType: 'short_term',
+      retention: 'short_term',
+      category: 'conversation',
+      ephemeral: true,
+      importance: 'low',
     }).catch((error) => {
       console.error('[agent-memory] failed to persist memory', { agentId: this.id, messageId: message.id, error });
     });

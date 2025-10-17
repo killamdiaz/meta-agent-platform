@@ -57,12 +57,12 @@ export function Legend({ data }: LegendProps) {
               <span className="text-foreground">Document</span>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <div className="w-3 h-3 rounded-full bg-atlas-glow" />
-              <span className="text-foreground">Memory (latest)</span>
+              <div className="w-3 h-3 rounded-full bg-sky-400" />
+              <span className="text-foreground">Memory (STM)</span>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <div className="w-3 h-3 rounded-full bg-orange-500" />
-              <span className="text-foreground">Memory (older)</span>
+              <div className="w-3 h-3 rounded-full bg-emerald-400" />
+              <span className="text-foreground">Memory (LTM)</span>
             </div>
             <div className="flex items-center gap-2 text-xs">
               <div className="w-3 h-3 rotate-45 bg-green-500" />
