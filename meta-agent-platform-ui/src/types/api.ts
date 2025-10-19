@@ -42,6 +42,11 @@ export interface AgentGraphSnapshot {
   links: AgentGraphLinkSnapshot[];
 }
 
+export interface TokenUsageSnapshot {
+  total: number;
+  byAgent: Record<string, number>;
+}
+
 export interface AgentMessageEvent {
   id: string;
   from: string;
@@ -112,6 +117,48 @@ export interface AutomationPipeline {
   edges: AutomationEdge[];
 }
 
+export type AutomationInstructionAction =
+  | {
+      type: 'create_node';
+      node?: {
+        id?: string;
+        label?: string;
+        agentType?: string;
+        type?: AutomationNodeType;
+        config?: Record<string, unknown>;
+        position?: { x: number; y: number };
+        metadata?: Record<string, unknown>;
+      };
+    }
+  | {
+      type: 'update_node';
+      id: string;
+      label?: string;
+      agentType?: string;
+      nodeType?: AutomationNodeType;
+      config?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+      position?: { x: number; y: number };
+    }
+  | { type: 'delete_node'; id: string }
+  | { type: 'connect_nodes'; from: string; to: string; metadata?: Record<string, unknown> }
+  | { type: 'disconnect_nodes'; from: string; to: string }
+  | { type: 'update_metadata'; name?: string; description?: string; data?: Record<string, unknown> }
+  | { type: 'set_position'; id: string; position: { x: number; y: number } }
+  | { type: 'set_positions'; positions: Record<string, { x: number; y: number }> }
+  | { type: 'create_edge'; edge: { from: string; to: string; metadata?: Record<string, unknown> } }
+  | { type: 'delete_edge'; edge: { from: string; to: string } }
+  | { type: 'focus_node'; id: string }
+  | { type: 'custom'; payload: Record<string, unknown> }
+  | { type: string; [key: string]: unknown };
+
+export interface AutomationInterpretationResponse {
+  success?: boolean;
+  message?: string;
+  actions: AutomationInstructionAction[];
+  raw?: string;
+}
+
 export type AutomationBuilderStatus = "success" | "awaiting_key" | "saved" | "loaded";
 
 export interface AutomationBuilderResponse {
@@ -176,6 +223,7 @@ export interface OverviewInsights {
     updatedAt: string;
     agentName: string;
   }[];
+  tokenUsage?: TokenUsageSnapshot;
 }
 
 export interface CommandResponse {

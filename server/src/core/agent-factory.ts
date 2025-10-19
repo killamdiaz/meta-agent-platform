@@ -11,6 +11,8 @@ import { AtlasAutomationAgent } from '../tools/atlas/AtlasAutomationAgent.js';
 import type { BaseAgent, BaseAgentOptions } from '../multiAgent/BaseAgent.js';
 import type { AgentSchema } from '../types/agents.js';
 import { logAgentEvent } from './agent-logger.js';
+import { coreOrchestrator } from '../multiAgent/index.js';
+import { getAgentProfile, type PrivilegeLevel } from '../registry/AgentProfileRegistry.js';
 
 type AgentConstructor = new (options: any) => BaseAgent;
 
@@ -27,6 +29,10 @@ const BUILTIN_AGENT_DEFINITIONS: Array<{ keys: string[]; ctor: AgentConstructor 
   },
   {
     keys: ['SlackToolAgent', 'SlackTool', 'slack-tool'],
+    ctor: SlackToolAgent as AgentConstructor,
+  },
+  {
+    keys: ['SlackCustomerSupportAgent', 'SlackSupportAgent', 'SlackCustomerSupport'],
     ctor: SlackToolAgent as AgentConstructor,
   },
   {
@@ -75,6 +81,122 @@ function getCachedDynamicAgent(type: string): AgentConstructor | undefined {
   return dynamicAgentCache.get(type.toLowerCase());
 }
 
+function extractCapabilities(config: Record<string, unknown>, fallback: string[] = []): string[] {
+  const raw = config.capabilities;
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === 'string');
+  }
+  return fallback;
+}
+
+function extractSafeActions(config: Record<string, unknown>, fallback: string[] = []): string[] {
+  const raw = config.safeActions;
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toUpperCase());
+  }
+  return fallback;
+}
+
+function extractCommandScope(config: Record<string, unknown>, fallback: string[] = []): string[] {
+  const raw = config.commandScope;
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === 'string');
+  }
+  return fallback;
+}
+
+function extractPrivilegeLevel(config: Record<string, unknown>, fallback: PrivilegeLevel): PrivilegeLevel {
+  const raw = config.privilegeLevel;
+  if (typeof raw === 'string') {
+    const normalized = raw.toLowerCase() as PrivilegeLevel;
+    return normalized;
+  }
+  return fallback;
+}
+
+function extractBindings(config: Record<string, unknown>): string[] {
+  const raw = config.bindings;
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === 'string');
+  }
+  if (raw && typeof raw === 'object') {
+    return Object.entries(raw)
+      .filter(([, enabled]) => Boolean(enabled))
+      .map(([key]) => key);
+  }
+  return [];
+}
+
+function buildRegistrationPayload(
+  agentType: string,
+  config: Record<string, unknown>,
+  schemaCapabilities?: string[],
+) {
+  const profile = getAgentProfile(agentType);
+  const capabilities = new Set<string>();
+  const safeActions = new Set<string>();
+  const commandScope = new Set<string>();
+
+  for (const capability of profile?.capabilities ?? []) {
+    capabilities.add(capability.toLowerCase());
+  }
+  for (const capability of schemaCapabilities ?? []) {
+    if (typeof capability === 'string') {
+      capabilities.add(capability.toLowerCase());
+    }
+  }
+  for (const capability of extractCapabilities(config, [])) {
+    capabilities.add(capability.toLowerCase());
+  }
+
+  for (const action of profile?.safeActions ?? []) {
+    safeActions.add(action.toUpperCase());
+  }
+  for (const action of extractSafeActions(config, [])) {
+    safeActions.add(action.toUpperCase());
+  }
+
+  for (const scope of profile?.commandScope ?? []) {
+    commandScope.add(scope);
+  }
+  for (const scope of extractCommandScope(config, [])) {
+    commandScope.add(scope);
+  }
+
+  if (safeActions.size === 0) {
+    ['TASK', 'RESULT', 'INFO'].forEach((action) => safeActions.add(action));
+  }
+
+  // Ensure capabilities align with declared safe actions.
+  if (safeActions.has('RESULT') || safeActions.has('INFO')) {
+    capabilities.add('respond');
+  }
+  if (safeActions.has('TASK')) {
+    capabilities.add('delegate');
+  }
+  if (safeActions.has('COMMAND')) {
+    capabilities.add('command');
+  }
+  if (safeActions.has('BROADCAST') || safeActions.has('END')) {
+    capabilities.add('coordinate');
+  }
+
+  if (capabilities.size === 0) {
+    capabilities.add('respond');
+  }
+
+  const privilegeLevel = extractPrivilegeLevel(config, profile?.privilegeLevel ?? 'tool');
+
+  return {
+    capabilities: Array.from(capabilities),
+    safeActions: Array.from(safeActions),
+    commandScope: Array.from(commandScope),
+    privilegeLevel,
+  };
+}
+
 export async function createAgent(type: string, config: BaseAgentOptions & Record<string, unknown>): Promise<BaseAgent> {
   const requestedType = type.trim();
   console.info(`[agent-factory] createAgent requested`, { type: requestedType });
@@ -84,6 +206,15 @@ export async function createAgent(type: string, config: BaseAgentOptions & Recor
     console.info(`[agent-factory] using built-in agent for "${requestedType}"`);
     const instance = new BuiltInAgent(config);
     await bindClient(instance, requestedType, config);
+    const registration = buildRegistrationPayload(requestedType, config);
+    coreOrchestrator.registerAgent(instance.id, {
+      agentType: requestedType,
+      capabilities: registration.capabilities,
+      safeActions: registration.safeActions,
+      commandScope: registration.commandScope,
+      privilegeLevel: registration.privilegeLevel,
+      bindings: extractBindings(config),
+    });
     logAgentEvent(instance.id, `Agent instantiated (built-in: ${instance.constructor.name})`, {
       metadata: { stage: 'spawn', type: requestedType, source: 'factory' },
     });
@@ -95,6 +226,15 @@ export async function createAgent(type: string, config: BaseAgentOptions & Recor
     console.info(`[agent-factory] restored cached dynamic agent "${requestedType}"`);
     const instance = new cached(config);
     await bindClient(instance, requestedType, config);
+    const registration = buildRegistrationPayload(requestedType, config);
+    coreOrchestrator.registerAgent(instance.id, {
+      agentType: requestedType,
+      capabilities: registration.capabilities,
+      safeActions: registration.safeActions,
+      commandScope: registration.commandScope,
+      privilegeLevel: registration.privilegeLevel,
+      bindings: extractBindings(config),
+    });
     logAgentEvent(instance.id, `Agent instantiated from cache`, {
       metadata: { stage: 'spawn', type: requestedType, source: 'factory', cache: true },
     });
@@ -109,6 +249,15 @@ export async function createAgent(type: string, config: BaseAgentOptions & Recor
     const DynamicAgent = cacheDynamicAgent(requestedType, record.schema);
     const instance = new DynamicAgent(config);
     await bindClient(instance, requestedType, config);
+    const registration = buildRegistrationPayload(requestedType, config, record.schema.capabilities);
+    coreOrchestrator.registerAgent(instance.id, {
+      agentType: requestedType,
+      capabilities: registration.capabilities,
+      safeActions: registration.safeActions,
+      commandScope: registration.commandScope,
+      privilegeLevel: registration.privilegeLevel,
+      bindings: extractBindings(config),
+    });
     logAgentEvent(instance.id, `Agent instantiated from registry schema`, {
       metadata: {
         stage: 'spawn',
@@ -127,6 +276,15 @@ export async function createAgent(type: string, config: BaseAgentOptions & Recor
   const DynamicAgent = cacheDynamicAgent(requestedType, generatedSchema);
   const instance = new DynamicAgent(config);
   await bindClient(instance, requestedType, config);
+  const registration = buildRegistrationPayload(requestedType, config, generatedSchema.capabilities);
+  coreOrchestrator.registerAgent(instance.id, {
+    agentType: requestedType,
+    capabilities: registration.capabilities,
+    safeActions: registration.safeActions,
+    commandScope: registration.commandScope,
+    privilegeLevel: registration.privilegeLevel,
+    bindings: extractBindings(config),
+  });
   logAgentEvent(instance.id, `Agent generated and instantiated`, {
     metadata: {
       stage: 'spawn',

@@ -26,6 +26,8 @@ export class SlackClient {
   private monitoredChannels?: string[];
   private resolvingMonitoredChannels?: Promise<string[]>;
   private readonly threadCheckpoints = new Map<string, { channelId: string; lastTs: number }>();
+  private supportsMpim: boolean | null = null;
+  private mpimWarningLogged = false;
 
   constructor(config: SlackClientConfig) {
     if (!config.token) {
@@ -34,6 +36,117 @@ export class SlackClient {
     this.client = new WebClient(config.token);
     this.defaultChannel = config.defaultChannel;
     this.startupTimestamp = Math.floor(Date.now() / 1000);
+  }
+
+  private static deepIncludes(source: unknown, needle: string, depth = 0): boolean {
+    if (!source || depth > 6) return false;
+    if (typeof source === 'string') {
+      return source.includes(needle);
+    }
+    if (Array.isArray(source)) {
+      return source.some((value) => SlackClient.deepIncludes(value, needle, depth + 1));
+    }
+    if (typeof source === 'object') {
+      return Object.values(source as Record<string, unknown>).some((value) =>
+        SlackClient.deepIncludes(value, needle, depth + 1),
+      );
+    }
+    return false;
+  }
+
+  private static messageContainsMention(message: unknown, botUserId: string, channelId: string): boolean {
+    const needle = `<@${botUserId}>`;
+    const channelType =
+      typeof (message as { channel_type?: unknown }).channel_type === 'string'
+        ? ((message as { channel_type: string }).channel_type as string)
+        : undefined;
+    if (channelId?.startsWith('D') || channelType === 'im' || channelType === 'mpim') {
+      // Direct messages do not include explicit mention syntax; treat them as mentions.
+      return true;
+    }
+    if (!message || typeof message !== 'object') return false;
+    const text = (message as { text?: unknown }).text;
+    if (typeof text === 'string' && text.includes(needle)) {
+      return true;
+    }
+    const blocks = (message as { blocks?: unknown }).blocks;
+    if (SlackClient.deepIncludes(blocks, needle)) {
+      return true;
+    }
+    const attachments = (message as { attachments?: unknown }).attachments;
+    if (SlackClient.deepIncludes(attachments, needle)) {
+      return true;
+    }
+    return false;
+  }
+
+  private static collectTextFragments(source: unknown, output: string[], depth = 0) {
+    if (!source || depth > 5) return;
+    if (typeof source === 'string') {
+      const fragment = source.replace(/\s+/g, ' ').trim();
+      if (fragment) {
+        output.push(fragment);
+      }
+      return;
+    }
+    if (Array.isArray(source)) {
+      for (const item of source) {
+        SlackClient.collectTextFragments(item, output, depth + 1);
+      }
+      return;
+    }
+    if (typeof source === 'object') {
+      const record = source as Record<string, unknown>;
+      const directText = record.text;
+      if (typeof directText === 'string') {
+        const fragment = directText.replace(/\s+/g, ' ').trim();
+        if (fragment) {
+          output.push(fragment);
+        }
+      } else if (directText && typeof directText === 'object') {
+        SlackClient.collectTextFragments(directText, output, depth + 1);
+      }
+
+      if (Array.isArray(record.elements)) {
+        SlackClient.collectTextFragments(record.elements, output, depth + 1);
+      }
+
+      if (record.type === 'user') {
+        const userId =
+          typeof record.user === 'string'
+            ? record.user
+            : typeof record.user_id === 'string'
+            ? record.user_id
+            : undefined;
+        if (userId) {
+          output.push(`<@${userId}>`);
+        }
+      }
+
+      for (const [key, value] of Object.entries(record)) {
+        if (key === 'text' || key === 'elements' || key === 'type' || key === 'style' || key === 'user' || key === 'user_id' || key === 'name') {
+          continue;
+        }
+        SlackClient.collectTextFragments(value, output, depth + 1);
+      }
+    }
+  }
+
+  private static extractMessageText(message: unknown): string {
+    const fragments: string[] = [];
+    if (message && typeof message === 'object') {
+      const rootText = (message as { text?: unknown }).text;
+      if (typeof rootText === 'string') {
+        const trimmed = rootText.replace(/\s+/g, ' ').trim();
+        if (trimmed) {
+          fragments.push(trimmed);
+        }
+      }
+      SlackClient.collectTextFragments((message as { blocks?: unknown }).blocks, fragments);
+      SlackClient.collectTextFragments((message as { attachments?: unknown }).attachments, fragments);
+    }
+    const unique = Array.from(new Set(fragments.map((fragment) => fragment.trim()).filter(Boolean)));
+    return unique.join(' ').trim();
   }
 
   async postMessage(message: SlackMessage) {
@@ -48,12 +161,55 @@ export class SlackClient {
     });
   }
 
+  private conversationTypes(): string {
+    const types = ['public_channel', 'private_channel', 'im'];
+    if (this.supportsMpim !== false) {
+      types.push('mpim');
+    }
+    return types.join(',');
+  }
+
+  private downgradeOnMissingMpimScope(error: unknown, context?: Record<string, unknown>): boolean {
+    const platformError = typeof (error as { code?: string }).code === 'string' ? (error as { code: string }).code : null;
+    const data = (error as {
+      data?: {
+        error?: string;
+        needed?: string | string[];
+        provided?: string | string[];
+        response_metadata?: { messages?: string[] };
+      };
+    }).data;
+
+    if (platformError === 'slack_webapi_platform_error' && data?.error === 'missing_scope') {
+      const neededScopes = Array.isArray(data.needed) ? data.needed.join(',') : data.needed ?? '';
+      const metadataMessages = data.response_metadata?.messages ?? [];
+      const combined = `${neededScopes} ${metadataMessages.join(' ')}`.toLowerCase();
+      if (combined.includes('mpim')) {
+        if (this.supportsMpim !== false && !this.mpimWarningLogged) {
+          console.warn('[slack-tool-agent] token missing mpim scope, skipping MPIM channels', {
+            needed: data.needed,
+            provided: data.provided,
+            context,
+          });
+          this.mpimWarningLogged = true;
+        }
+        this.supportsMpim = false;
+        return true;
+      }
+    }
+    return false;
+  }
+
   async fetchRecentMentions(limit = 5) {
     const channelIds = await this.resolveMonitoredChannels();
     if (!channelIds.length) {
       console.warn('[slack-tool-agent] no channels configured or discovered for monitoring');
       return [];
     }
+    console.debug('[slack-tool-agent] monitoring channels', {
+      channels: channelIds,
+      supportsMpim: this.supportsMpim !== false,
+    });
 
     const botUserId = await this.ensureBotUserId();
     const mentions: Array<{
@@ -81,17 +237,7 @@ export class SlackClient {
               inclusive: true,
             });
           } catch (error) {
-            if (
-              error &&
-              typeof error === 'object' &&
-              'data' in error &&
-              (error as { data?: { error?: string } }).data?.error === 'missing_scope'
-            ) {
-              const needed = (error as { data?: { needed?: string } }).data?.needed;
-              console.warn('[slack-tool-agent] missing scope while fetching history', {
-                channelId,
-                needed,
-              });
+            if (this.downgradeOnMissingMpimScope(error, { channelId, operation: 'history' })) {
               return { skipped: true };
             }
             throw error;
@@ -134,17 +280,7 @@ export class SlackClient {
                   });
                 }
               } catch (error) {
-                if (
-                  error &&
-                  typeof error === 'object' &&
-                  'data' in error &&
-                  (error as { data?: { error?: string } }).data?.error === 'missing_scope'
-                ) {
-                  console.warn('[slack-tool-agent] missing scope while fetching thread history', {
-                    channelId,
-                    thread: parentTs,
-                    needed: (error as { data?: { needed?: string } }).data?.needed,
-                  });
+                if (this.downgradeOnMissingMpimScope(error, { channelId, thread: parentTs, operation: 'thread-history' })) {
                   return { skipped: true };
                 }
                 throw error;
@@ -199,18 +335,7 @@ export class SlackClient {
           this.threadCheckpoints.set(rootTs, { channelId: info.channelId, lastTs: updatedLastTs });
         }
       } catch (error) {
-        if (
-          error &&
-          typeof error === 'object' &&
-          'data' in error &&
-          (error as { data?: { error?: string } }).data?.error === 'missing_scope'
-        ) {
-          const needed = (error as { data?: { needed?: string } }).data?.needed;
-          console.warn('[slack-tool-agent] missing scope while fetching tracked thread history', {
-            channelId: info.channelId,
-            thread: rootTs,
-            needed,
-          });
+        if (this.downgradeOnMissingMpimScope(error, { channelId: info.channelId, thread: rootTs, operation: 'tracked-thread' })) {
           continue;
         }
         throw error;
@@ -345,20 +470,42 @@ export class SlackClient {
       let cursor: string | undefined;
 
       do {
-        const response = await this.client.conversations.list({
-          limit: 200,
-          cursor,
-          types: 'public_channel,private_channel',
-        });
+        let response;
+        try {
+          response = await this.client.conversations.list({
+            limit: 200,
+            cursor,
+            types: this.conversationTypes(),
+          });
+        } catch (error) {
+          if (this.downgradeOnMissingMpimScope(error, { operation: 'conversations.list' })) {
+            continue;
+          }
+          throw error;
+        }
         const entries =
-          response.channels?.filter((channel) => channel?.is_member && channel.id).map((channel) => channel!.id!) ?? [];
+          response.channels
+            ?.filter((channel) => {
+              if (!channel?.id) return false;
+              if (channel.is_im || channel.is_mpim) {
+                return true;
+              }
+              return Boolean(channel.is_member);
+            })
+            .map((channel) => channel!.id!) ?? [];
         channels.push(...entries);
-        cursor = typeof response.response_metadata?.next_cursor === 'string' && response.response_metadata.next_cursor.length > 0
-          ? response.response_metadata.next_cursor
-          : undefined;
-      } while (cursor && channels.length < 20);
+        cursor =
+          typeof response.response_metadata?.next_cursor === 'string' &&
+          response.response_metadata.next_cursor.length > 0
+            ? response.response_metadata.next_cursor
+            : undefined;
+      } while (cursor && channels.length < 50);
 
-      this.monitoredChannels = channels.slice(0, 20);
+      this.monitoredChannels = channels.slice(0, 50);
+      console.debug('[slack-tool-agent] discovered channels', {
+        channels: this.monitoredChannels,
+        supportsMpim: this.supportsMpim !== false,
+      });
       this.resolvingMonitoredChannels = undefined;
       return this.monitoredChannels;
     })();
@@ -384,10 +531,14 @@ export class SlackClient {
       return;
     }
 
-    const text = typeof (message as { text?: unknown }).text === 'string' ? (message as { text: string }).text : '';
-    if (!text || !text.includes(`<@${botUserId}>`)) {
+    const hasMention = SlackClient.messageContainsMention(message, botUserId, channelId);
+    if (!hasMention) {
       return;
     }
+
+    const text =
+      SlackClient.extractMessageText(message) ||
+      `<@${botUserId}>`;
 
     const numericTs = Number.parseFloat(ts);
     if (Number.isFinite(numericTs) && numericTs <= oldestCheckpoint) {
@@ -432,6 +583,11 @@ const TOKEN_KEYS = [
   'slackBotToken',
   'slack_bot_token',
   'apiToken',
+  'SLACK_BOT_TOKEN',
+  'SLACK_TOKEN',
+  'SLACK_API_TOKEN',
+  'SLACK_APP_TOKEN',
+  'SLACK_BOT_OAUTH_TOKEN',
 ];
 
 const CHANNEL_KEYS = ['defaultChannel', 'channel', 'channelId', 'channel_id', 'channelName'];
@@ -448,7 +604,12 @@ function resolveStringValue(values: Record<string, unknown>, keys: string[]): st
 }
 
 export function createSlackClientFromConfig(values: Record<string, unknown>): SlackClient {
-  const token = resolveStringValue(values, TOKEN_KEYS) ?? '';
+  const token =
+    resolveStringValue(values, TOKEN_KEYS) ??
+    process.env.SLACK_BOT_TOKEN ??
+    process.env.SLACK_TOKEN ??
+    process.env.SLACK_API_TOKEN ??
+    '';
   const defaultChannel = resolveStringValue(values, CHANNEL_KEYS);
   const signingSecret = resolveStringValue(values, SIGNING_SECRET_KEYS);
   if (!token) {

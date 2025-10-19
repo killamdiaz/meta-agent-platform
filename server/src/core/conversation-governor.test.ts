@@ -52,6 +52,7 @@ describe('ConversationGovernor', () => {
     const second = await governor.shouldAllow('agent-1', buildMessage({ content: 'Plan for launch' }));
     assert.equal(first, true);
     assert.equal(second, false, 'Redundant content should be blocked');
+    assert.ok(governor.getNoiseScore('agent-1') > 0, 'Noise score should increase after redundant block');
   });
 
   it('tracks token budgets and blocks when exceeded', async () => {
@@ -77,5 +78,13 @@ describe('ConversationGovernor', () => {
     assert.equal(allow1, true);
     assert.equal(allow2, true);
     assert.equal(allow3, false, 'Looping intent should be blocked');
+    assert.ok(governor.getNoiseScore('agent-1') > 0, 'Noise score should capture loop penalty');
+  });
+
+  it('allows manual noise penalties for ungrounded replies', () => {
+    const governor = new ConversationGovernor(basePolicy);
+    governor.penalize('agent-99', 'ungrounded', 2);
+    assert.ok(governor.getNoiseScore('agent-99') >= 2, 'Manual penalty should update noise score');
+    assert.ok(governor.getPriority('agent-99') < 1, 'Priority should decrease with higher noise');
   });
 });

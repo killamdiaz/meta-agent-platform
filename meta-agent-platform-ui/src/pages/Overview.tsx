@@ -1,3 +1,4 @@
+import { useEffect, useMemo } from "react";
 import { ArrowUp, Circle, Sparkles } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
@@ -5,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import type { AgentRecord } from "@/types/api";
 import { formatDistanceToNow } from "date-fns";
+import { useTokenStore } from "@/store/tokenStore";
 
 function formatPercent(part: number, total: number) {
   if (!total) return "0%";
@@ -38,7 +40,31 @@ export default function Overview() {
     refetchInterval: 20_000,
   });
 
-  const stats = overview
+  const totalTokens = useTokenStore((state) => state.totalTokens);
+  const tokensByAgent = useTokenStore((state) => state.tokensByAgent);
+  const setTokenUsage = useTokenStore((state) => state.setUsage);
+
+  useEffect(() => {
+    if (overview?.tokenUsage) {
+      setTokenUsage(overview.tokenUsage);
+    }
+  }, [overview, setTokenUsage]);
+
+  const topTokenConsumer = useMemo(() => {
+    const entries = Object.entries(tokensByAgent ?? {});
+    if (entries.length === 0) {
+      return null;
+    }
+    const [agent, tokens] = entries.sort((a, b) => b[1] - a[1])[0];
+    return { agent, tokens };
+  }, [tokensByAgent]);
+
+  const formattedTokens = totalTokens.toLocaleString();
+  const tokenHighlight = topTokenConsumer
+    ? `${topTokenConsumer.tokens.toLocaleString()} by ${topTokenConsumer.agent}`
+    : "Tracking…";
+
+  const overviewStats = overview
     ? [
         {
           label: "Active Agents",
@@ -76,33 +102,44 @@ export default function Overview() {
         <p className="text-muted-foreground">Monitor your AI workforce performance</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {overviewLoading && !overview ? (
-          Array.from({ length: 4 }).map((_, idx) => (
-            <Card key={idx} className="bg-card border-border p-6">
-              <Skeleton className="h-20 w-full" />
-            </Card>
-          ))
-        ) : (
-          stats.map((stat) => (
-            <Card
-              key={stat.label}
-              className="bg-card border-border p-6 hover:border-atlas-glow/50 transition-all duration-300"
-            >
-              <div className="space-y-2">
-                <div className="text-sm text-muted-foreground">{stat.label}</div>
-                <div className="flex items-baseline gap-2">
-                  <div className="text-3xl font-bold text-foreground">{stat.value}</div>
-                  <div className="flex items-center text-xs text-atlas-success gap-1">
-                    <ArrowUp className="h-3 w-3" />
-                    {stat.change}
-                  </div>
-                </div>
-                <div className="text-xs text-muted-foreground">{stat.detail}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card className="bg-card border-border p-6 hover:border-atlas-glow/50 transition-all duration-300">
+          <div className="space-y-2">
+            <div className="text-sm text-muted-foreground">Tokens Used</div>
+            <div className="flex items-baseline gap-2">
+              <div className="text-3xl font-bold text-foreground">{formattedTokens}</div>
+              <div className="flex items-center text-xs text-atlas-glow gap-1">
+                <ArrowUp className="h-3 w-3" />
+                {tokenHighlight}
               </div>
-            </Card>
-          ))
-        )}
+            </div>
+            <div className="text-xs text-muted-foreground">Since runtime start</div>
+          </div>
+        </Card>
+        {overviewLoading && !overview
+          ? Array.from({ length: 4 }).map((_, idx) => (
+              <Card key={`skeleton-${idx}`} className="bg-card border-border p-6">
+                <Skeleton className="h-20 w-full" />
+              </Card>
+            ))
+          : overviewStats.map((stat) => (
+              <Card
+                key={stat.label}
+                className="bg-card border-border p-6 hover:border-atlas-glow/50 transition-all duration-300"
+              >
+                <div className="space-y-2">
+                  <div className="text-sm text-muted-foreground">{stat.label}</div>
+                  <div className="flex items-baseline gap-2">
+                    <div className="text-3xl font-bold text-foreground">{stat.value}</div>
+                    <div className="flex items-center text-xs text-atlas-success gap-1">
+                      <ArrowUp className="h-3 w-3" />
+                      {stat.change}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">{stat.detail}</div>
+                </div>
+              </Card>
+            ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

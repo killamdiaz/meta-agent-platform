@@ -1,0 +1,14 @@
+{
+  "name": "meta-commander-agent",
+  "description": "System-level commander responsible for supervising orchestrators and enforcing guardrails.",
+  "role": "System Commander",
+  "privilegeLevel": "commander",
+  "capabilities": ["command", "coordinate", "delegate", "respond", "summarize"],
+  "safeActions": ["TASK", "COMMAND", "RESULT", "INFO"],
+  "commandScope": [
+    "atlas-bridge-orchestrator",
+    "monitor-agent",
+    "governor-agent",
+    "reporting-orchestrator"
+  ]
+}

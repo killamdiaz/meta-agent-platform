@@ -11,6 +11,7 @@ import type {
   MultiAgentSession,
   AutomationBuilderResponse,
   AutomationPipeline,
+  AutomationInterpretationResponse,
 } from '@/types/api';
 
 const API_BASE = (() => {
@@ -242,6 +243,19 @@ export const api = {
   endAutomationSession(sessionId: string): Promise<void> {
     return request(`/automation-builder/session/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
+    });
+  },
+
+  interpretAutomationPrompt(
+    prompt: string,
+    context?: { pipeline?: AutomationPipeline | null; name?: string; description?: string },
+  ): Promise<AutomationInterpretationResponse> {
+    return request('/automation-builder/interpret', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        context: context ?? {},
+      }),
     });
   },
 };

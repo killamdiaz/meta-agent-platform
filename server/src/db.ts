@@ -45,7 +45,9 @@ export async function initDb() {
       content TEXT NOT NULL,
       embedding VECTOR(768),
       metadata JSONB DEFAULT '{}'::jsonb,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      memory_type TEXT NOT NULL DEFAULT 'long_term',
+      expires_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS sent_messages (
@@ -82,6 +84,15 @@ export async function initDb() {
       UNIQUE(agent_id)
     );
 
+    CREATE TABLE IF NOT EXISTS automations (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name TEXT NOT NULL,
+      automation_type TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS controller_approvals (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
@@ -102,7 +113,22 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS agent_registry (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      schema JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    ALTER TABLE agent_memory
+      ADD COLUMN IF NOT EXISTS memory_type TEXT NOT NULL DEFAULT 'long_term';
+    ALTER TABLE agent_memory
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
     CREATE INDEX IF NOT EXISTS idx_agent_memory_agent_id ON agent_memory(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_memory_type ON agent_memory(memory_type);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_expires_at ON agent_memory(expires_at);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_sent_messages_status ON sent_messages(status);
     CREATE INDEX IF NOT EXISTS idx_controller_approvals_status ON controller_approvals(status);

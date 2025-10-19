@@ -15,8 +15,8 @@ function mapAgentStatus(status: string): 'active' | 'new' | 'older' | 'forgotten
   }
 }
 
-function mapMemoryStatus(createdAt: string): 'active' | 'new' | 'older' | 'forgotten' | 'expiring' {
-  const created = new Date(createdAt).getTime();
+function mapMemoryStatus(memory: { created_at: string }): 'active' | 'new' | 'older' | 'forgotten' | 'expiring' {
+  const created = new Date(memory.created_at).getTime();
   const ageHours = (Date.now() - created) / (1000 * 60 * 60);
   if (Number.isNaN(ageHours) || ageHours < 0) {
     return 'active';
@@ -47,9 +47,25 @@ router.get('/graph', async (_req, res, next) => {
         id: string;
         agent_id: string;
         content: string;
-        created_at: string;
         metadata: Record<string, unknown>;
-      }>(`SELECT id, agent_id, content, metadata, created_at FROM agent_memory ORDER BY created_at DESC LIMIT 300`),
+        created_at: string;
+      }>(
+        `SELECT id,
+                agent_id,
+                content,
+                metadata,
+                created_at
+           FROM agent_memory
+          WHERE memory_type = 'long_term'
+            AND COALESCE(metadata->>'category', '') <> 'conversation'
+            AND content NOT ILIKE 'received % message %'
+            AND content NOT ILIKE 'sent % message %'
+            AND content NOT ILIKE 'reply to %'
+            AND content NOT ILIKE 'sent to slack%'
+            AND content NOT ILIKE 'slack user%'
+          ORDER BY created_at DESC
+          LIMIT 300`
+      ),
       pool.query<{
         id: string;
         agent_id: string;
@@ -79,10 +95,14 @@ router.get('/graph', async (_req, res, next) => {
       id: memory.id,
       type: 'memory',
       label: memory.content.length > 80 ? `${memory.content.slice(0, 77)}...` : memory.content,
-      status: mapMemoryStatus(memory.created_at),
+      status: mapMemoryStatus({
+        created_at: memory.created_at
+      }),
       metadata: {
         createdAt: memory.created_at,
-        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
+        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id,
+        memoryType: 'long_term',
+        expiresAt: null
       }
     }));
 

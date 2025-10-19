@@ -1,12 +1,9 @@
-import OpenAI from 'openai';
-import { config } from '../config.js';
 import { MemoryService } from '../services/MemoryService.js';
 import { internetAccessModule, type FetchOptions, type FetchResult, type SearchResult } from '../services/InternetAccessModule.js';
 import { MailQueueService } from '../services/MailQueueService.js';
 import { metaController } from './MetaController.js';
 import type { AgentConfigField } from '../services/AgentConfigService.js';
-
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
+import { routeMessage } from '../llm/router.js';
 
 export interface AgentRecord {
   id: string;
@@ -77,46 +74,34 @@ export class Agent {
   async think(prompt: string, onToken?: (token: string) => void) {
     const latestMemories = await this.loadMemory();
     const context = latestMemories.map((memory) => memory.content).join('\n');
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
-      { role: 'system', content: `You are ${this.name}, a ${this.role}.` },
-      { role: 'user', content: prompt }
-    ];
-    if (context) {
-      messages.push({ role: 'assistant', content: context });
-    }
-
-    if (!openai) {
-      const fallback = [`Thought from ${this.name}:`, prompt, context].filter(Boolean).join('\n');
-      if (onToken) {
-        onToken(fallback);
-      }
-      return fallback;
-    }
+    const systemContext = [
+      `You are ${this.name}, a ${this.role}.`,
+      'You have access to both short-term and long-term memories supplied via the conversation context.',
+      'Use those memories to inform answers, reference prior facts when helpful, and never claim you lack memory when relevant information is provided.',
+      'If the supplied memories do not contain the answer, simply reason it out or ask clarifying questions—do not disclaim an inability to remember.',
+    ].join(' ');
 
     if (onToken) {
-      const stream = await openai.chat.completions.create({
-        model: 'gpt-5',
-        messages,
-        stream: true
-      });
       let final = '';
-      for await (const chunk of stream) {
-        const token = chunk.choices?.[0]?.delta?.content ?? '';
-        if (!token) {
-          continue;
-        }
-        final += token;
-        onToken(token);
-      }
+      await routeMessage({
+        prompt,
+        context: `${systemContext}\n\nMemories:\n${context}`,
+        intent: 'agent_think',
+        stream: true,
+        onToken: (token) => {
+          final += token;
+          onToken(token);
+        },
+      });
       return final.trim();
     }
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5',
-      messages
+    const content = await routeMessage({
+      prompt,
+      context: `${systemContext}\n\nMemories:\n${context}`,
+      intent: 'agent_think',
     });
-    const content = response.choices[0]?.message?.content ?? '';
-    return content.trim();
+    return content;
   }
 
   async act(task: { id: string; prompt: string }, result: string) {

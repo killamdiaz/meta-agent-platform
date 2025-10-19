@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import type { AgentRegistry } from './AgentRegistry.js';
 import {
   MessageBroker,
@@ -9,9 +8,11 @@ import {
 } from './MessageBroker.js';
 import { MemoryService } from '../services/MemoryService.js';
 import { config } from '../config.js';
+import { getCoreOrchestrator } from '../core/orchestrator-registry.js';
+import type { GovernedMessage } from '../core/orchestrator.js';
+import { routeMessage } from '../llm/router.js';
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
 export interface BaseAgentOptions {
   id: string;
@@ -145,13 +146,39 @@ export abstract class BaseAgent {
     content: string,
     metadata?: AgentMessage['metadata'],
   ): Promise<AgentMessage> {
-    const message = this.broker.publish({
+    const orchestrator = getCoreOrchestrator();
+    const governed: GovernedMessage = {
       from: this.id,
       to,
-      type,
+      type: this.mapAgentMessageType(type),
+      intent: typeof metadata?.intent === 'string' ? metadata.intent : type,
       content,
-      metadata,
-    });
+      confidence: typeof metadata?.confidence === 'number' ? metadata.confidence : undefined,
+      tokens: typeof metadata?.tokens === 'number' ? metadata.tokens : undefined,
+      metadata: metadata as Record<string, unknown> | undefined,
+      requiredCapabilities: Array.isArray(metadata?.requiredCapabilities)
+        ? (metadata?.requiredCapabilities as string[])
+        : undefined,
+      requiredBindings: Array.isArray(metadata?.requiredBindings)
+        ? (metadata?.requiredBindings as string[])
+        : undefined,
+      conversationId: typeof metadata?.conversationId === 'string' ? metadata.conversationId : undefined,
+    };
+
+    const published = await orchestrator.broadcast(governed);
+    if (!published) {
+      throw new Error('Message blocked by conversation governor.');
+    }
+
+    const message: AgentMessage = {
+      id: published.id,
+      timestamp: published.timestamp,
+      from: published.from,
+      to: published.to,
+      type: published.type,
+      content: published.content,
+      metadata: published.metadata,
+    };
     this.noteConnection(to);
     this.recordMemory(message, 'outgoing');
     this.emitTalkingState(message, 'outgoing', true);
@@ -174,6 +201,17 @@ export abstract class BaseAgent {
     }, 250);
     this.teardownCallbacks.push(() => clearTimeout(deactivate));
     return message;
+  }
+
+  private mapAgentMessageType(type: AgentMessageType): GovernedMessage['type'] {
+    switch (type) {
+      case 'response':
+        return 'RESULT';
+      case 'task':
+        return 'TASK';
+      default:
+        return 'INFO';
+    }
   }
 
   getMemorySnapshot(): AgentMemoryEntry[] {
@@ -308,24 +346,11 @@ export abstract class BaseAgent {
       userPromptLines.push('', 'Metadata:', JSON.stringify(options.metadata, null, 2));
     }
 
-    if (!openai) {
-      return [
-        `(offline) ${this.name} drafting response...`,
-        `Received from ${options.from}: "${options.content}"`,
-        options.context ? `Context: ${options.context}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    }
-
-    const response = await openai.chat.completions.create({
-      model: this.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPromptLines.join('\n') },
-      ],
+    const reply = await routeMessage({
+      prompt: userPromptLines.join('\n'),
+      context: systemPrompt,
+      intent: 'agent_comms',
     });
-    const reply = response.choices[0]?.message?.content?.trim();
     if (!reply) {
       return 'No response generated.';
     }

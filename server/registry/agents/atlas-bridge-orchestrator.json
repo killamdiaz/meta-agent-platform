@@ -1,0 +1,19 @@
+{
+  "name": "atlas-bridge-orchestrator",
+  "description": "Bridge between Meta Agent Platform and Atlas OS modules, coordinating cross-domain workflows.",
+  "role": "Master Orchestrator",
+  "privilegeLevel": "orchestrator",
+  "capabilities": ["respond", "delegate", "command", "coordinate", "execute", "summarize", "query"],
+  "safeActions": ["TASK", "RESULT", "BROADCAST", "COMMAND"],
+  "commandScope": [
+    "meta-commander-agent",
+    "slack-customer-support-bot",
+    "discord-support-bot",
+    "notion-knowledge-agent",
+    "jira-task-agent",
+    "gmail-communication-agent",
+    "google-calendar-agent",
+    "docs-summarizer-agent",
+    "data-analyst-agent"
+  ]
+}

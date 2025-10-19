@@ -15,8 +15,10 @@ import memoryRoute from './routes/memory.js';
 import metaControllerRoute from './routes/metaController.js';
 import multiAgentRoute from './routes/multiAgent.js';
 import { metaController } from './core/MetaController.js';
+import automationsRoute from './routes/automations.js';
 import { toolRuntime } from './multiAgent/ToolRuntime.js';
 import agentConfigRoute from './routes/agentConfig.js';
+import automationBuilderRoute from './routes/automationBuilder.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +43,8 @@ async function bootstrap() {
   app.use('/memory', memoryRoute);
   app.use('/meta-controller', metaControllerRoute);
   app.use('/multi-agent', multiAgentRoute);
+  app.use('/automations', automationsRoute);
+  app.use('/automation-builder', automationBuilderRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
@@ -50,10 +54,12 @@ async function bootstrap() {
       '/commands',
       '/agent-builder',
       '/agent-config',
+      '/automation-builder',
       '/insights',
       '/memory',
       '/multi-agent',
       '/meta-controller',
+      '/automations',
       '/healthz'
     ];
     app.use(express.static(publicDir));

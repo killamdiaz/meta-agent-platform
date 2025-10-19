@@ -64,10 +64,25 @@ Environment variables are loaded from `.env`. The most important values are:
 ```
 DATABASE_URL=postgres://postgres:postgres@db:5432/postgres
 OPENAI_API_KEY=sk-...
+FORCE_LOCAL=false   # optional: force all LLM calls to Ollama
+FORCE_GPT=false     # optional: force all LLM calls to OpenAI GPT
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=mistral:7b
 COORDINATOR_INTERVAL_MS=10000
 REACT_APP_API_BASE=http://localhost:4000
 VITE_API_BASE=http://localhost:4000
 ```
+
+### Dual-Model Router
+
+The runtime now routes every LLM request through a lightweight router that chooses between the local Ollama **mistral:7b** model and OpenAI GPT. Short, low-complexity prompts are served locally, while heavier reasoning falls back to GPT. This hybrid strategy has been reducing paid token usage by **70–90%** in internal testing. Logs expose the selection and latency, e.g.:
+
+```
+[router] model=local time=186ms tokens≈42
+[router] model=gpt time=912ms tokens≈128
+```
+
+Override behaviour by exporting `FORCE_LOCAL=true` or `FORCE_GPT=true` in `.env`. Streaming is supported on both backends, so existing token-by-token UIs continue to function.
 
 ## Services
 

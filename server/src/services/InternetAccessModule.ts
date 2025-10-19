@@ -6,8 +6,8 @@ import axios, {
 } from 'axios';
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
-import OpenAI from 'openai';
 import { config } from '../config.js';
+import { routeMessage } from '../llm/router.js';
 
 export interface FetchOptions {
   method?: 'GET' | 'POST';
@@ -38,8 +38,6 @@ export interface SearchResult {
   snippet: string;
   score: number;
 }
-
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
 function normalizeText(text: string) {
   return text.replace(/\s+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -107,26 +105,14 @@ export class InternetAccessModule {
       return '';
     }
 
-    if (!openai) {
-      return content.slice(0, 480);
-    }
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an autonomous research agent. Summarize the referenced article in 4 concise bullet points with one-sentence explanations. Include a "Key Quote" line with the most relevant quote.',
-        },
-        {
-          role: 'user',
-          content: `URL: ${url}\n\nContent:\n${content.slice(0, 6000)}`,
-        },
-      ],
+    const summary = await routeMessage({
+      prompt: `URL: ${url}\n\nContent:\n${content.slice(0, 6000)}`,
+      context:
+        'You are an autonomous research agent. Summarize the referenced article in 4 concise bullet points with one-sentence explanations. Include a "Key Quote" line with the most relevant quote.',
+      intent: 'internet_summary',
     });
 
-    return response.choices[0]?.message?.content?.trim() ?? content.slice(0, 600);
+    return summary || content.slice(0, 600);
   }
 
   private extractMetadata(html: string) {

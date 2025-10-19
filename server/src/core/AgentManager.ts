@@ -492,11 +492,15 @@ export class AgentManager {
 
       const agent = this.instantiate(agentRecord);
       await metaController.onTaskStarted(task, { id: agent.id, name: agent.name });
-      this.emitTaskEvent(task.id, {
-        type: 'log',
-        message: `${agent.name} received your request. Laying out a plan...`,
-        agent: agentRecord,
-      });
+      const agentName = agent.name ?? '';
+      const isMetaController = agentName.toLowerCase().includes('meta-controller');
+      if (!isMetaController) {
+        this.emitTaskEvent(task.id, {
+          type: 'log',
+          message: `${agentName} received your request. Laying out a plan...`,
+          agent: agentRecord,
+        });
+      }
 
       let augmentedPrompt = task.prompt;
       const researchQueries = agent.internetEnabled ? AgentManager.deriveResearchQueries(task.prompt) : [];

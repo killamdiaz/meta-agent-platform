@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { formatDistanceToNowStrict } from "date-fns";
+import { useTokenStore } from "@/store/tokenStore";
 
 const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
@@ -27,12 +28,21 @@ export function AppSidebar() {
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
+  const totalTokens = useTokenStore((state) => state.totalTokens);
+  const setTokenUsage = useTokenStore((state) => state.setUsage);
+
+  useEffect(() => {
+    if (overview?.tokenUsage) {
+      setTokenUsage(overview.tokenUsage);
+    }
+  }, [overview, setTokenUsage]);
 
   const usage = useMemo(() => {
     if (!overview) {
       return {
         agents: "–",
         tasks: "–",
+        tokens: totalTokens.toLocaleString(),
         uptime: "",
       };
     }
@@ -44,9 +54,10 @@ export function AppSidebar() {
     return {
       agents: `${overview.agentCount}`,
       tasks: `${overview.taskCounts.total}`,
+      tokens: totalTokens.toLocaleString(),
       uptime,
     };
-  }, [overview]);
+  }, [overview, totalTokens]);
 
   return (
     <div className="flex h-screen w-64 flex-col bg-sidebar">
@@ -113,6 +124,10 @@ export function AppSidebar() {
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Tasks</span>
             <span className="text-foreground">{usage.tasks}</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Tokens</span>
+            <span className="text-foreground">{usage.tokens}</span>
           </div>
         </div>
         {usage.uptime && (

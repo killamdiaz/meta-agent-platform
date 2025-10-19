@@ -186,12 +186,15 @@ router.get('/:id/memory', async (req, res, next) => {
     ]);
     const memories = memoryRows.map((memory) => ({
       id: memory.id,
+      agent_id: memory.agent_id,
       content: memory.content,
       metadata: {
         ...(memory.metadata ?? {}),
         createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
       },
-      created_at: memory.created_at
+      created_at: memory.created_at,
+      memory_type: memory.memory_type,
+      expires_at: memory.expires_at
     }));
 
     res.json({

@@ -1,6 +1,6 @@
-import OpenAI from 'openai';
 import { pool } from '../db.js';
 import { config } from '../config.js';
+import { routeMessage } from '../llm/router.js';
 
 export type AgentConfigFieldType = 'string' | 'number' | 'boolean' | 'password' | 'textarea' | 'select';
 
@@ -29,8 +29,6 @@ export interface AgentConfigRecord extends AgentConfigTemplate {
   values: Record<string, unknown>;
 }
 
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
-
 const TOOL_KNOWLEDGE_BASE: Array<{
   keywords: RegExp[];
   agentType: string;
@@ -44,6 +42,15 @@ const TOOL_KNOWLEDGE_BASE: Array<{
     schema: [
       { key: 'slackToken', label: 'Slack Bot Token', type: 'password', required: true, secure: true, tooltip: 'xoxb- token with chat:write scope.' },
       { key: 'signingSecret', label: 'Signing Secret', type: 'password', required: true, secure: true },
+      { key: 'defaultChannel', label: 'Default Channel', type: 'string', required: false, placeholder: '#general' },
+    ],
+  },
+  {
+    agentType: 'SlackAgent',
+    description: 'Outbound Slack agent that posts updates into channels or threads.',
+    keywords: [/slack/i, /notify/i, /post/i],
+    schema: [
+      { key: 'slackToken', label: 'Slack Bot Token', type: 'password', required: true, secure: true, tooltip: 'xoxb- token with chat:write scope.' },
       { key: 'defaultChannel', label: 'Default Channel', type: 'string', required: false, placeholder: '#general' },
     ],
   },
@@ -143,17 +150,6 @@ class AgentConfigService {
       throw new Error('Description is required to generate a config schema.');
     }
 
-    if (!openai) {
-      return fallbackTemplate(description);
-    }
-
-    const systemPrompt = [
-      'You design configuration schemas for autonomous agents.',
-      'Return JSON with keys: agentType, description, configSchema (array of fields), defaults (optional).',
-      'Field object format: { key, label, type (string|number|boolean|password|textarea|select), required?, secure?, options?, description?, placeholder?, tooltip?, defaultValue? }',
-      'Choose secure=true for secrets. Keep between 1 and 6 fields. Avoid asking for redundant information.',
-    ].join(' ');
-
     const userPrompt = JSON.stringify({
       description: description.trim(),
       existingAgents: context.existingAgents ?? [],
@@ -161,14 +157,12 @@ class AgentConfigService {
     });
 
     try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-5',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
+      const raw = await routeMessage({
+        prompt: userPrompt,
+        context:
+          'You design configuration schemas for autonomous agents. Return JSON with keys: agentType, description, configSchema (array of fields), defaults (optional). Field format: { key, label, type (string|number|boolean|password|textarea|select), required?, secure?, options?, description?, placeholder?, tooltip?, defaultValue? }. Keep 1-6 fields.',
+        intent: 'agent_config_schema',
       });
-      const raw = response.choices[0]?.message?.content ?? '';
       const parsed = this.parseCompletion(raw) ?? fallbackTemplate(description);
       const fields = parsed.configSchema?.map(sanitizeField).filter((field) => field.key) ?? [];
       if (!fields.length) {

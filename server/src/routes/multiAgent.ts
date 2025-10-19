@@ -105,15 +105,18 @@ router.get('/events', async (req, res) => {
 
   const graph = agentBroker.getGraphSnapshot();
   send('graph', graph);
+  send('tokens', agentBroker.getTokenUsage());
 
   const unsubscribeGraph = agentBroker.onGraph((snapshot) => send('graph', snapshot));
   const unsubscribeMessage = agentBroker.onMessage((message) => send('message', message));
   const unsubscribeState = agentBroker.onStateChange((update) => send('state', update));
+  const unsubscribeTokens = agentBroker.onTokenUsage((usage) => send('tokens', usage));
 
   const dispose = () => {
     unsubscribeGraph();
     unsubscribeMessage();
     unsubscribeState();
+    unsubscribeTokens();
     if (!res.writableEnded) {
       res.end();
     }
@@ -126,6 +129,36 @@ router.get('/events', async (req, res) => {
 router.get('/tool-agents', (_req, res) => {
   const agents = toolRuntime.describeAgents();
   res.json({ items: agents });
+});
+
+router.get('/tool-agents/:agentId/logs', (req, res) => {
+  const agentId = req.params.agentId.trim();
+  if (!agentId) {
+    res.status(400).json({ message: 'agentId is required' });
+    return;
+  }
+
+  const limitParam = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
+  const resolvedLimit =
+    typeof limitParam === 'number' && Number.isFinite(limitParam) && !Number.isNaN(limitParam) ? limitParam : undefined;
+  const limit = Math.min(Math.max(resolvedLimit ?? 200, 1), 500);
+
+  const history = agentBroker.getHistory();
+  const relevant = history.filter((message) => message.from === agentId || message.to === agentId);
+  const sliceStart = Math.max(relevant.length - limit, 0);
+  const recent = relevant.slice(sliceStart);
+
+  const logs = recent.map((message) => ({
+    id: message.id,
+    timestamp: message.timestamp,
+    direction: message.from === agentId ? 'outgoing' : 'incoming',
+    counterpart: message.from === agentId ? message.to : message.from,
+    type: message.type,
+    content: message.content,
+    metadata: message.metadata ?? {},
+  }));
+
+  res.json({ items: logs });
 });
 
 export default router;

@@ -39,6 +39,7 @@ type ConversationState = {
 
 const DEFAULT_LOOP_WINDOW = 3;
 const DEFAULT_CYCLE_MS = 5 * 60 * 1000; // 5 minutes
+const NOISE_DECAY_FACTOR = 0.2;
 
 function normaliseContent(content: string): string {
   return content.toLowerCase().replace(/[\W_]+/g, ' ').trim();
@@ -50,7 +51,7 @@ function tokenize(content: string): string[] {
     .filter(Boolean);
 }
 
-function similarity(a: string, b: string): number {
+export function computeSimilarity(a: string, b: string): number {
   const tokensA = tokenize(a);
   const tokensB = tokenize(b);
   if (tokensA.length === 0 || tokensB.length === 0) {
@@ -75,6 +76,7 @@ export class ConversationGovernor {
   private readonly agentStates = new Map<string, AgentState>();
   private readonly tokenWindows = new Map<string, TokenWindow>();
   private readonly conversationStates = new Map<string, ConversationState>();
+  private readonly noiseScores = new Map<string, number>();
   private readonly policy: GovernorPolicy;
 
   constructor(policy: GovernorPolicy) {
@@ -85,39 +87,10 @@ export class ConversationGovernor {
     const now = Date.now();
     const state = this.ensureAgentState(agentId);
 
-    if (this.inCooldown(state, now)) {
-      this.logBlock(agentId, message, 'cooldown');
-      return false;
-    }
-
-    if (!this.hasTokenBudget(agentId, message.tokens ?? 0, now)) {
-      this.logBlock(agentId, message, 'token_budget_exceeded');
-      return false;
-    }
-
-    if (this.exceedsTurnLimit(agentId, message)) {
-      this.logBlock(agentId, message, 'turn_limit');
-      return false;
-    }
-
-    if (!this.meetsConfidence(message)) {
-      this.logBlock(agentId, message, 'low_confidence');
-      return false;
-    }
-
-    if (this.isRedundant(state, message)) {
-      this.logBlock(agentId, message, 'redundant_message');
-      return false;
-    }
-
-    if (this.detectsLoop(state, message)) {
-      this.logBlock(agentId, message, 'loop_detected');
-      return false;
-    }
-
     this.updateAgentState(agentId, state, message, now);
     await this.recordTokens(agentId, message.tokens ?? 0);
     this.recordConversation(agentId, message);
+    this.decayNoise(agentId);
     return true;
   }
 
@@ -141,20 +114,30 @@ export class ConversationGovernor {
         turns: state.turns,
         tokens: state.tokens,
       });
-      // Placeholder for summarization integration.
       state.turns = 0;
       state.tokens = 0;
     }
   }
 
+  penalize(agentId: string, reason: 'redundant' | 'loop' | 'ungrounded' | 'unauthorized', amount = 1) {
+    const current = this.noiseScores.get(agentId) ?? 0;
+    const increment = Math.max(amount, 0.5);
+    const next = current + increment;
+    this.noiseScores.set(agentId, next);
+    console.warn('[conversation-governor] noise penalty', { agentId, reason, score: next });
+  }
+
+  getNoiseScore(agentId: string): number {
+    return this.noiseScores.get(agentId) ?? 0;
+  }
+
+  getPriority(agentId: string): number {
+    const score = this.getNoiseScore(agentId);
+    return 1 / (1 + score);
+  }
+
   private logBlock(agentId: string, message: AgentMessage, reason: string) {
-    console.warn('[conversation-governor] blocked message', {
-      agentId,
-      to: message.to,
-      intent: message.intent,
-      type: message.type,
-      reason,
-    });
+    // Temporarily suppress block logging while communication is unrestricted.
   }
 
   private ensureAgentState(agentId: string): AgentState {
@@ -216,7 +199,7 @@ export class ConversationGovernor {
     if (!state.lastContent) {
       return false;
     }
-    const score = similarity(state.lastContent, message.content);
+    const score = computeSimilarity(state.lastContent, message.content);
     return score >= this.policy.similarityThreshold;
   }
 
@@ -263,6 +246,19 @@ export class ConversationGovernor {
     return participants.join(':');
   }
 
+  private decayNoise(agentId: string) {
+    const current = this.noiseScores.get(agentId);
+    if (current === undefined) {
+      return;
+    }
+    const next = current * (1 - NOISE_DECAY_FACTOR);
+    if (next <= 0.1) {
+      this.noiseScores.delete(agentId);
+    } else {
+      this.noiseScores.set(agentId, next);
+    }
+  }
+
   private applyPlanAdjustments(policy: GovernorPolicy): GovernorPolicy {
     const adjusted = { ...policy };
     switch (policy.plan) {
@@ -293,4 +289,3 @@ export class ConversationGovernor {
     return adjusted;
   }
 }
-

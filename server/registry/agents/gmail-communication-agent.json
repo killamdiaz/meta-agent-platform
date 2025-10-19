@@ -1,0 +1,9 @@
+{
+  "name": "gmail-communication-agent",
+  "description": "Manages Gmail communications for outreach, follow-ups, and summaries.",
+  "role": "Communication Agent",
+  "privilegeLevel": "tool",
+  "capabilities": ["respond", "execute", "notify", "summarize"],
+  "safeActions": ["TASK", "RESULT"],
+  "commandScope": []
+}

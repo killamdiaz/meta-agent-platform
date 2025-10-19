@@ -1,0 +1,8 @@
+{
+  "deploy": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "./Dockerfile",
+    "startCommand": "docker compose up --build --remove-orphans"
+  }
+}
+

@@ -1,6 +1,7 @@
 import type { BaseAgent } from '../multiAgent/BaseAgent.js';
 import { CLIENT_BINDINGS, type ClientBinding } from './clients/map.js';
 import { logAgentEvent } from './agent-logger.js';
+import { coreOrchestrator } from '../multiAgent/index.js';
 
 type BindableAgent = BaseAgent & { client: unknown };
 type Credentials = Record<string, string>;
@@ -235,6 +236,7 @@ export async function bindClient(
 
     bindable.client = client;
     console.log(`${LOG_PREFIX} Bound ${binding.label} client for type=${type}`);
+    coreOrchestrator.updateBindings(bindable.id, [binding.label.toLowerCase()]);
     logAgentEvent(bindable.id, `Bound ${binding.label} client`, {
       metadata: { stage: 'binding', status: 'bound', provider: binding.label },
     });

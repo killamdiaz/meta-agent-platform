@@ -1,0 +1,9 @@
+{
+  "name": "jira-task-agent",
+  "description": "Executes Jira task operations including ticket creation, updates, and status sync.",
+  "role": "Task Executor",
+  "privilegeLevel": "tool",
+  "capabilities": ["execute", "create", "update", "notify"],
+  "safeActions": ["TASK", "RESULT"],
+  "commandScope": []
+}
