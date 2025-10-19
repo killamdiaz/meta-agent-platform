@@ -89,6 +89,7 @@ Override behaviour by exporting `FORCE_LOCAL=true` or `FORCE_GPT=true` in `.env`
 - **db** – Postgres 15 with pgvector extension enabled
 - **server** – Node/Express API with the coordinator loop
 - **frontend** – React + TypeScript dashboard
+- **forge** – Next.js authentication scaffold integrating Supabase/Atlas SSO (see `forge/README.md`)
 - **nginx** – reverse proxy stitching `/api` to the server and `/` to the UI
 
 ## Agent Workflow

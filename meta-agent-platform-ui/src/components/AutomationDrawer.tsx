@@ -4,7 +4,6 @@ import ReactFlow, { Background, BackgroundVariant, Controls, MiniMap, type Edge,
 import "reactflow/dist/style.css";
 import { Button } from "@/components/ui/button";
 import { useAgentGraphStore } from "@/store/agentGraphStore";
-import { useAgentGraphStream } from "@/hooks/useAgentGraphStream";
 import type { AutomationPipeline } from "@/types/api";
 
 interface AutomationDrawerProps {
@@ -30,7 +29,6 @@ const generatePosition = (index: number, total: number): { x: number; y: number 
 const formatNodeLabel = (node: { agent: string; type: string }) => `${node.agent} · ${node.type}`;
 
 export function AutomationDrawer({ open, onClose, pipeline, sessionId, status }: AutomationDrawerProps) {
-  useAgentGraphStream(open);
   const agents = useAgentGraphStore((state) => state.agents);
   const links = useAgentGraphStore((state) => state.links);
 

@@ -35,15 +35,37 @@ services:
     command: npm run dev -- --host 0.0.0.0 --port 8080
     depends_on:
       - server
+    env_file:
+      - .env
     environment:
       - CHOKIDAR_USEPOLLING=true
       - BROWSER=none
+      - VITE_API_BASE=http://server:4000
       - VITE_API_BASE_URL=http://server:4000
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+      - VITE_ATLAS_LOGIN_URL=${VITE_ATLAS_LOGIN_URL}
     volumes:
       - ./meta-agent-platform-ui:/app
       - /app/node_modules
     ports:
       - "3000:8080"
+
+  forge:
+    build: ./forge
+    depends_on:
+      - server
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      NEXT_PUBLIC_META_AGENT_ID: ${NEXT_PUBLIC_META_AGENT_ID:-forge}
+      META_AGENT_SECRET: ${META_AGENT_SECRET}
+      NEXT_PUBLIC_ATLAS_LOGIN_URL: ${NEXT_PUBLIC_ATLAS_LOGIN_URL}
+    ports:
+      - "3100:3000"
 
   nginx:
     image: nginx:alpine

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { formatDistanceToNowStrict } from "date-fns";
 import { useTokenStore } from "@/store/tokenStore";
+import { useAuth } from "@/context/AuthContext";
 
 const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
@@ -29,7 +30,9 @@ export function AppSidebar() {
     refetchInterval: 30_000,
   });
   const totalTokens = useTokenStore((state) => state.totalTokens);
+  const tokensLastUpdated = useTokenStore((state) => state.lastUpdated);
   const setTokenUsage = useTokenStore((state) => state.setUsage);
+  const { user } = useAuth();
 
   useEffect(() => {
     if (overview?.tokenUsage) {
@@ -58,6 +61,18 @@ export function AppSidebar() {
       uptime,
     };
   }, [overview, totalTokens]);
+
+  const profile = useMemo(() => {
+    if (!user) {
+      return null;
+    }
+    const name =
+      (user.user_metadata?.full_name as string | undefined)?.trim() ||
+      user.email ||
+      "Atlas Operator";
+    const email = user.email ?? "";
+    return { name, email };
+  }, [user]);
 
   return (
     <div className="flex h-screen w-64 flex-col bg-sidebar">
@@ -127,11 +142,19 @@ export function AppSidebar() {
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Tokens</span>
-            <span className="text-foreground">{usage.tokens}</span>
+            <span className="text-foreground">
+              {tokensLastUpdated ? usage.tokens : "Tracking…"}
+            </span>
           </div>
         </div>
         {usage.uptime && (
           <div className="text-xs text-muted-foreground">Uptime {usage.uptime}</div>
+        )}
+        {profile && (
+          <div className="mt-4 rounded-xl border border-sidebar-border bg-sidebar-accent/30 p-3">
+            <div className="mt-2 text-sm font-medium text-foreground">{profile.name}</div>
+            <div className="text-xs text-muted-foreground">{profile.email}</div>
+          </div>
         )}
       </div>
     </div>

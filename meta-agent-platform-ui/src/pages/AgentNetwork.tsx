@@ -22,7 +22,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { CreateAgentDrawer } from "@/components/AgentNetwork/CreateAgentDrawer";
 import { useAgentGraphStore } from "@/store/agentGraphStore";
 import { useAutomationPipelineStore } from "@/store/automationPipelineStore";
-import useAgentGraphStream from "@/hooks/useAgentGraphStream";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -736,7 +735,6 @@ export default function AgentNetwork() {
     setLassoStart(null);
   }, []);
 
-  useAgentGraphStream(true);
   const graphAgents = useAgentGraphStore((state) => state.agents);
   const graphLinks = useAgentGraphStore((state) => state.links);
 
