@@ -116,7 +116,35 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       .filter((link) => link._sourceId !== link._targetId && nodeIds.has(link._sourceId) && nodeIds.has(link._targetId))
       .map(({ _sourceId, _targetId, ...link }) => link);
 
-    return { nodes, links };
+    const agentIds = nodes.filter((node) => node.type === "agent").map((node) => node.id);
+    const nonAgentNodes = nodes.filter((node) => node.type !== "agent").map((node) => node.id);
+
+    const linkSet = new Set<string>();
+    links.forEach((link) => {
+      const key = `${link.source}→${link.target}`;
+      const reverseKey = `${link.target}→${link.source}`;
+      linkSet.add(key);
+      linkSet.add(reverseKey);
+    });
+
+    const augmentedLinks = [...links];
+    for (const targetId of nonAgentNodes) {
+      for (const agentId of agentIds) {
+        const key = `${agentId}→${targetId}`;
+        if (!linkSet.has(key)) {
+          augmentedLinks.push({
+            source: agentId,
+            target: targetId,
+            relation: "shared" as const,
+            strength: 0.4,
+          });
+          linkSet.add(key);
+          linkSet.add(`${targetId}→${agentId}`);
+        }
+      }
+    }
+
+    return { nodes, links: augmentedLinks };
   }, [data]);
 
   useEffect(() => {

@@ -73,6 +73,12 @@ REACT_APP_API_BASE=http://localhost:4000
 VITE_API_BASE=http://localhost:4000
 ```
 
+### Atlas Forge Integration
+
+- **Meta Bridge Credentials** – Server-side agents that talk to Atlas Forge require `META_AGENT_SECRET` (already referenced in `.env`) and a valid JWT. Set `META_AGENT_JWT` (or `ATLAS_BRIDGE_TOKEN`) to the Supabase access token that should be used for bridge calls. Without it, the MetaCortex bus suppresses `/bridge-notify` fan-out.
+- **HMAC Signing** – Requests to `https://lighdepncfhiecqllmod.supabase.co/functions/v1` now flow through the shared `AtlasBridgeClient`, which signs every call with `X-Agent-Id` and `X-Agent-Signature` (HMAC SHA-256 of `agentId + jwt`). Retry/backoff for `401/429` is built in and GET responses are cached for five minutes.
+- **Built-in Atlas Agents** – The runtime ships specialised agents (`MemoryGraphAgent`, `TaskAgent`, `CalendarAgent`, `FinanceAgent`, `EmailMonitoringAgent`, `AISummarizerAgent`, `AnalyticsAgent`, and `MetaControllerAgent`) that automatically call their assigned Forge endpoints and collaborate via `request_context` / `context_response` bus events. Register them through the dashboard or CLI and provide per-agent bridge credentials under the new `bridge` configuration block.
+
 ### Dual-Model Router
 
 The runtime now routes every LLM request through a lightweight router that chooses between the local Ollama **mistral:7b** model and OpenAI GPT. Short, low-complexity prompts are served locally, while heavier reasoning falls back to GPT. This hybrid strategy has been reducing paid token usage by **70–90%** in internal testing. Logs expose the selection and latency, e.g.:

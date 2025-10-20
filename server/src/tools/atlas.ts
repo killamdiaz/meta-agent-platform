@@ -1,38 +1,56 @@
-import crypto from 'node:crypto';
+import { AtlasBridgeClient, ATLAS_BRIDGE_DEFAULT_BASE_URL } from '../core/atlas/BridgeClient.js';
 
-interface AtlasRequestAuth {
-  token: string;
-  agentId: string;
-  secret: string;
-  baseUrl?: string;
-}
+const ENV_BASE_URL = typeof process !== 'undefined' ? process.env?.ATLAS_BRIDGE_BASE_URL?.trim() : '';
 
-interface AtlasRequestOptions {
-  path: string;
-  method?: 'GET' | 'POST';
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  logMessage?: string;
-}
+const clientRegistry = new Map<string, AtlasBridgeClient>();
 
-interface FetchConfig extends AtlasRequestAuth, AtlasRequestOptions {}
-
-const DEFAULT_BASE_URL = (() => {
-  if (typeof process !== 'undefined' && process.env?.ATLAS_BRIDGE_BASE_URL) {
-    return process.env.ATLAS_BRIDGE_BASE_URL;
-  }
-  return 'https://lighdepncfhiecqllmod.supabase.co/functions/v1';
-})();
-
-const RETRYABLE_STATUS = new Set([401, 429]);
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 400;
+export { AtlasBridgeError, generateSignature } from '../core/atlas/BridgeClient.js';
 
 export interface AtlasCredentials {
-  token: string;
+  token?: string;
   agentId: string;
   secret: string;
   baseUrl?: string;
+  refreshToken?: () => Promise<string> | string;
+  defaultCacheTtlMs?: number;
+}
+
+function resolveBaseUrl(candidate?: string): string {
+  const provided = candidate?.trim();
+  if (provided && provided.length > 0) {
+    return provided.endsWith('/') ? provided.slice(0, -1) : provided;
+  }
+  if (ENV_BASE_URL && ENV_BASE_URL.length > 0) {
+    return ENV_BASE_URL.endsWith('/') ? ENV_BASE_URL.slice(0, -1) : ENV_BASE_URL;
+  }
+  return ATLAS_BRIDGE_DEFAULT_BASE_URL;
+}
+
+function getClient(credentials: AtlasCredentials): AtlasBridgeClient {
+  const baseUrl = resolveBaseUrl(credentials.baseUrl);
+  const ttlKey = credentials.defaultCacheTtlMs !== undefined ? String(credentials.defaultCacheTtlMs) : 'default';
+  const key = `${credentials.agentId}:${credentials.secret}:${baseUrl}:${ttlKey}`;
+  let client = clientRegistry.get(key);
+  if (!client) {
+    client = new AtlasBridgeClient({
+      agentId: credentials.agentId,
+      secret: credentials.secret,
+      baseUrl,
+      token: credentials.token,
+      tokenProvider: credentials.refreshToken,
+      defaultCacheTtlMs: credentials.defaultCacheTtlMs,
+    });
+    clientRegistry.set(key, client);
+    return client;
+  }
+
+  if (credentials.token) {
+    client.setToken(credentials.token);
+  }
+  if (credentials.refreshToken) {
+    client.setTokenProvider(credentials.refreshToken);
+  }
+  return client;
 }
 
 export interface UserSummaryResponse {
@@ -126,114 +144,11 @@ export interface SendNotificationResponse {
   [key: string]: unknown;
 }
 
-export function generateSignature(agentId: string, token: string, secret: string): string {
-  if (!agentId) throw new Error('agentId is required to generate signature.');
-  if (!token) throw new Error('token is required to generate signature.');
-  if (!secret) throw new Error('secret is required to generate signature.');
-  return crypto.createHmac('sha256', secret).update(agentId + token).digest('hex');
-}
-
-class AtlasApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly payload: unknown,
-  ) {
-    super(message);
-    this.name = 'AtlasApiError';
-  }
-}
-
-async function parseJsonSafely(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-function buildUrl(baseUrl: string, path: string, query?: Record<string, string | number | boolean | undefined>) {
-  const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const prefixedPath = path.startsWith('/') ? path : `/${path}`;
-  const url = new URL(`${trimmedBase}${prefixedPath}`);
-  if (query) {
-    for (const [key, value] of Object.entries(query)) {
-      if (value === undefined || value === null) continue;
-      url.searchParams.append(key, String(value));
-    }
-  }
-  return url.toString();
-}
-
-async function delay(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function performRequest<T>(config: FetchConfig): Promise<T> {
-  const { token, agentId, secret, baseUrl, path, method = 'GET', query, body, logMessage } = config;
-  const resolvedBaseUrl = baseUrl ?? DEFAULT_BASE_URL;
-
-  const url = buildUrl(resolvedBaseUrl, path, query);
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
-    const signature = generateSignature(agentId, token, secret);
-    try {
-      if (logMessage) {
-        console.log(logMessage);
-      }
-      const response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-Agent-Id': agentId,
-          'X-Agent-Signature': signature,
-          Accept: 'application/json',
-          ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-
-      if (response.ok) {
-        return (await parseJsonSafely(response)) as T;
-      }
-
-      const payload = await parseJsonSafely(response);
-      if (RETRYABLE_STATUS.has(response.status) && attempt < MAX_RETRIES) {
-        const backoff = BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 100;
-        await delay(backoff);
-        continue;
-      }
-
-      const message =
-        typeof payload === 'object' && payload && 'error' in payload && typeof payload.error === 'string'
-          ? payload.error
-          : `Atlas Bridge API request failed with status ${response.status}`;
-      throw new AtlasApiError(message, response.status, payload);
-    } catch (error) {
-      if (error instanceof AtlasApiError) {
-        throw error;
-      }
-      if (attempt >= MAX_RETRIES) {
-        throw error;
-      }
-      const backoff = BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 100;
-      await delay(backoff);
-    }
-  }
-
-  throw new Error('Failed to execute Atlas Bridge API request after retries.');
-}
-
 export async function getUserSummary(params: AtlasCredentials): Promise<UserSummaryResponse> {
-  return performRequest<UserSummaryResponse>({
-    ...params,
+  const client = getClient(params);
+  return client.request<UserSummaryResponse>({
     path: '/bridge-user-summary',
+    method: 'GET',
   });
 }
 
@@ -243,13 +158,13 @@ export interface GetContractsParams extends AtlasCredentials {
 }
 
 export async function getContracts(params: GetContractsParams): Promise<ContractsResponse> {
-  const { status, limit, ...auth } = params;
-  return performRequest<ContractsResponse>({
-    ...auth,
+  const client = getClient(params);
+  return client.request<ContractsResponse>({
     path: '/bridge-contracts',
+    method: 'GET',
     query: {
-      status,
-      limit,
+      status: params.status,
+      limit: params.limit,
     },
   });
 }
@@ -259,9 +174,9 @@ export interface CreateContractParams extends AtlasCredentials {
 }
 
 export async function createContract(params: CreateContractParams): Promise<CreateContractResponse> {
-  const { body, ...auth } = params;
-  return performRequest<CreateContractResponse>({
-    ...auth,
+  const { body, ...credentials } = params;
+  const client = getClient(credentials);
+  return client.request<CreateContractResponse>({
     path: '/bridge-contracts',
     method: 'POST',
     body,
@@ -274,12 +189,12 @@ export interface GetInvoicesParams extends AtlasCredentials {
 }
 
 export async function getInvoices(params: GetInvoicesParams): Promise<InvoicesResponse> {
-  const { limit, ...auth } = params;
-  return performRequest<InvoicesResponse>({
-    ...auth,
+  const client = getClient(params);
+  return client.request<InvoicesResponse>({
     path: '/bridge-invoices',
+    method: 'GET',
     query: {
-      limit,
+      limit: params.limit,
     },
   });
 }
@@ -289,9 +204,9 @@ export interface CreateTaskParams extends AtlasCredentials {
 }
 
 export async function createTask(params: CreateTaskParams): Promise<CreateTaskResponse> {
-  const { body, ...auth } = params;
-  return performRequest<CreateTaskResponse>({
-    ...auth,
+  const { body, ...credentials } = params;
+  const client = getClient(credentials);
+  return client.request<CreateTaskResponse>({
     path: '/bridge-tasks',
     method: 'POST',
     body,
@@ -304,9 +219,9 @@ export interface SendNotificationParams extends AtlasCredentials {
 }
 
 export async function sendNotification(params: SendNotificationParams): Promise<SendNotificationResponse> {
-  const { body, ...auth } = params;
-  return performRequest<SendNotificationResponse>({
-    ...auth,
+  const { body, ...credentials } = params;
+  const client = getClient(credentials);
+  return client.request<SendNotificationResponse>({
     path: '/bridge-notify',
     method: 'POST',
     body,

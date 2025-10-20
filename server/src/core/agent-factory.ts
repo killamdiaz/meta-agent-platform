@@ -8,6 +8,14 @@ import { SlackToolAgent } from '../tools/slack/SlackAgent.js';
 import { MailAgent } from '../tools/gmail/MailAgent.js';
 import { NotionAgent } from '../tools/notion/NotionAgent.js';
 import { AtlasAutomationAgent } from '../tools/atlas/AtlasAutomationAgent.js';
+import { MemoryGraphAgent } from '../multiAgent/agents/MemoryGraphAgent.js';
+import { TaskAgent } from '../multiAgent/agents/TaskAgent.js';
+import { CalendarAgent } from '../multiAgent/agents/CalendarAgent.js';
+import { FinanceAgent } from '../multiAgent/agents/FinanceAgent.js';
+import { EmailMonitoringAgent } from '../multiAgent/agents/EmailMonitoringAgent.js';
+import { AISummarizerAgent } from '../multiAgent/agents/AISummarizerAgent.js';
+import { AnalyticsAgent } from '../multiAgent/agents/AnalyticsAgent.js';
+import { MetaControllerAgent } from '../multiAgent/agents/MetaControllerAgent.js';
 import type { BaseAgent, BaseAgentOptions } from '../multiAgent/BaseAgent.js';
 import type { AgentSchema } from '../types/agents.js';
 import { logAgentEvent } from './agent-logger.js';
@@ -46,6 +54,38 @@ const BUILTIN_AGENT_DEFINITIONS: Array<{ keys: string[]; ctor: AgentConstructor 
   {
     keys: ['AtlasAutomationAgent', 'AtlasAgent', 'atlas'],
     ctor: AtlasAutomationAgent as AgentConstructor,
+  },
+  {
+    keys: ['MemoryGraphAgent', 'memory-graph-agent', 'atlas-memory-agent'],
+    ctor: MemoryGraphAgent as AgentConstructor,
+  },
+  {
+    keys: ['TaskAgent', 'task-agent', 'atlas-task-agent'],
+    ctor: TaskAgent as AgentConstructor,
+  },
+  {
+    keys: ['CalendarAgent', 'calendar-agent', 'google-calendar-agent'],
+    ctor: CalendarAgent as AgentConstructor,
+  },
+  {
+    keys: ['FinanceAgent', 'finance-agent', 'atlas-finance-agent'],
+    ctor: FinanceAgent as AgentConstructor,
+  },
+  {
+    keys: ['EmailMonitoringAgent', 'email-monitoring-agent', 'gmail-communication-agent'],
+    ctor: EmailMonitoringAgent as AgentConstructor,
+  },
+  {
+    keys: ['AISummarizerAgent', 'ai-summarizer-agent', 'docs-summarizer-agent'],
+    ctor: AISummarizerAgent as AgentConstructor,
+  },
+  {
+    keys: ['AnalyticsAgent', 'analytics-agent', 'data-analyst-agent'],
+    ctor: AnalyticsAgent as AgentConstructor,
+  },
+  {
+    keys: ['MetaControllerAgent', 'meta-controller-agent', 'atlas-meta-controller'],
+    ctor: MetaControllerAgent as AgentConstructor,
   },
 ];
 

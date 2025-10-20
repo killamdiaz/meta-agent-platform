@@ -53,6 +53,9 @@ const createMessage = (payload: Omit<Message, "id" | "createdAt">): Message => (
   ...payload,
 });
 
+const MIN_VISIBLE_MESSAGES = 40;
+const LAZY_LOAD_BATCH = 25;
+
 const formatPipelineSummary = (pipeline: AutomationPipeline) => {
   const lines = [];
   const title = pipeline.name ? `Automation: ${pipeline.name}` : "Automation pipeline updated";
@@ -267,6 +270,10 @@ export default function CommandConsole() {
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const taskStreams = useRef<Map<string, EventSource>>(new Map());
   const [historyOpen, setHistoryOpen] = useState(false);
   const automationSessionIdRef = useRef<string>(createAutomationSessionId());
@@ -277,6 +284,8 @@ export default function CommandConsole() {
   const [awaitingKey, setAwaitingKey] = useState<{ agent: string; prompt: string } | null>(null);
   const [automationKeyInput, setAutomationKeyInput] = useState("");
   const [automationStatusMessage, setAutomationStatusMessage] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(MIN_VISIBLE_MESSAGES);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
   const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
 
@@ -289,6 +298,62 @@ export default function CommandConsole() {
     () => sessions.find((session) => session.id === currentSessionId) ?? null,
     [sessions, currentSessionId],
   );
+
+  const displayedMessages = useMemo(() => {
+    const start = Math.max(0, messages.length - visibleCount);
+    return messages.slice(start);
+  }, [messages, visibleCount]);
+
+  const latestMessageSignature = useMemo(() => {
+    const last = displayedMessages[displayedMessages.length - 1];
+    if (!last) return "";
+    return `${last.id}:${last.streamContent ?? last.content ?? ""}:${last.status ?? ""}:${last.streamingState ?? ""}`;
+  }, [displayedMessages]);
+
+  const scrollToBottom = useCallback(
+    (options: { immediate?: boolean } = {}) => {
+      const element = scrollContainerRef.current;
+      if (!element) return;
+      const behavior = options.immediate ? "auto" : "smooth";
+      element.scrollTo({ top: element.scrollHeight, behavior });
+    },
+    [],
+  );
+
+  const handleScroll = useCallback(() => {
+    const element = scrollContainerRef.current;
+    if (!element) return;
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+    setAutoScrollEnabled(nearBottom);
+
+    if (element.scrollTop < 80 && visibleCount < messages.length) {
+      const previousHeight = element.scrollHeight;
+      setVisibleCount((prev) => Math.min(prev + LAZY_LOAD_BATCH, messages.length));
+      requestAnimationFrame(() => {
+        const current = scrollContainerRef.current;
+        if (!current) return;
+        const delta = current.scrollHeight - previousHeight;
+        current.scrollTop += delta;
+      });
+    }
+  }, [messages.length, visibleCount]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      setVisibleCount(MIN_VISIBLE_MESSAGES);
+      return;
+    }
+    setVisibleCount((prev) => {
+      const normalized = Math.min(Math.max(prev, MIN_VISIBLE_MESSAGES), messages.length);
+      return normalized;
+    });
+  }, [messages.length]);
+
+  useEffect(() => {
+    if (!displayedMessages.length) return;
+    if (!autoScrollEnabled) return;
+    scrollToBottom({ immediate: true });
+  }, [displayedMessages.length, latestMessageSignature, autoScrollEnabled, scrollToBottom]);
 
   const ensureSession = useCallback(() => {
     if (currentSessionId) {
@@ -310,6 +375,7 @@ export default function CommandConsole() {
       hydratedSessionRef.current = null;
       if (messages.length > 0) {
         setMessages([]);
+        setVisibleCount(MIN_VISIBLE_MESSAGES);
       }
       return;
     }
@@ -321,12 +387,16 @@ export default function CommandConsole() {
       hydratedSessionRef.current = null;
       historyHydrationRef.current = false;
       setMessages([]);
+      setVisibleCount(MIN_VISIBLE_MESSAGES);
       return;
     }
     hydratedSessionRef.current = currentSessionId;
     historyHydrationRef.current = true;
     const restored = session.messages.map((entry) => deserializeHistoryMessage(entry));
     setMessages(restored);
+    setVisibleCount(Math.min(MIN_VISIBLE_MESSAGES, restored.length || MIN_VISIBLE_MESSAGES));
+    setAutoScrollEnabled(true);
+    requestAnimationFrame(() => scrollToBottom({ immediate: true }));
     const timeout =
       typeof window !== "undefined"
         ? window.setTimeout(() => {
@@ -339,7 +409,7 @@ export default function CommandConsole() {
       }
       historyHydrationRef.current = false;
     };
-  }, [currentSessionId, sessions]);
+  }, [currentSessionId, sessions, scrollToBottom]);
 
   useEffect(() => {
     if (!currentSessionId) return;
@@ -500,11 +570,13 @@ export default function CommandConsole() {
           if (result.pipeline) {
             const summary = formatPipelineSummary(result.pipeline);
             setMessages((prev) => [...prev, createMessage({ role: "assistant", content: summary })]);
+            setAutoScrollEnabled(true);
           } else {
             setMessages((prev) => [
               ...prev,
               createMessage({ role: "assistant", content: "Automation pipeline updated." }),
             ]);
+            setAutoScrollEnabled(true);
           }
           break;
         }
@@ -516,6 +588,7 @@ export default function CommandConsole() {
             ...prev,
             createMessage({ role: "assistant", content: `${prompt} (${agent})` }),
           ]);
+          setAutoScrollEnabled(true);
           break;
         }
         case "saved": {
@@ -525,6 +598,7 @@ export default function CommandConsole() {
             ...prev,
             createMessage({ role: "assistant", content: `Automation saved as “${name}”.` }),
           ]);
+          setAutoScrollEnabled(true);
           break;
         }
         case "loaded": {
@@ -532,11 +606,13 @@ export default function CommandConsole() {
           if (result.pipeline) {
             const summary = formatPipelineSummary(result.pipeline);
             setMessages((prev) => [...prev, createMessage({ role: "assistant", content: summary })]);
+            setAutoScrollEnabled(true);
           } else {
             setMessages((prev) => [
               ...prev,
               createMessage({ role: "assistant", content: "Automation loaded successfully." }),
             ]);
+            setAutoScrollEnabled(true);
           }
           break;
         }
@@ -574,6 +650,7 @@ export default function CommandConsole() {
           ...prev,
           createMessage({ role: "system", content: `Automation builder error: ${message}` }),
         ]);
+        setAutoScrollEnabled(true);
         toast({
           title: "Automation builder error",
           description: message,
@@ -618,6 +695,7 @@ export default function CommandConsole() {
           ...prev,
           createMessage({ role: "system", content: `Credential submission failed: ${message}` }),
         ]);
+        setAutoScrollEnabled(true);
         toast({ title: "Credential submission failed", description: message, variant: "destructive" });
       }
     },
@@ -767,6 +845,7 @@ export default function CommandConsole() {
           streamingState: response.task ? "streaming" : undefined,
         }),
       ]);
+      setAutoScrollEnabled(true);
       if (response.task?.id) {
         startTaskStream(response.task.id);
       }
@@ -778,6 +857,7 @@ export default function CommandConsole() {
         ...prev,
         createMessage({ role: "system", content: `Error: ${error.message}` }),
       ]);
+      setAutoScrollEnabled(true);
       toast({ title: "Command failed", description: error.message, variant: "destructive" });
     },
   });
@@ -857,6 +937,29 @@ export default function CommandConsole() {
     return agents.slice(0, 4).map((agent) => `@${agent.name} run a status update`);
   }, [agents]);
 
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const normalized = mentionQuery.toLowerCase();
+    return agents.filter((agent) => {
+      if (!normalized) return true;
+      return (
+        agent.name.toLowerCase().includes(normalized) ||
+        agent.role.toLowerCase().includes(normalized) ||
+        agent.id.toLowerCase().includes(normalized)
+      );
+    });
+  }, [agents, mentionQuery]);
+
+  useEffect(() => {
+    if (mentionCandidates.length === 0) {
+      setMentionIndex(0);
+      return;
+    }
+    if (mentionIndex >= mentionCandidates.length) {
+      setMentionIndex(0);
+    }
+  }, [mentionCandidates, mentionIndex]);
+
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -864,6 +967,7 @@ export default function CommandConsole() {
     ensureSession();
     const userMessage = createMessage({ role: "user", content: trimmed });
     setMessages((prev) => [...prev, userMessage]);
+    setAutoScrollEnabled(true);
 
     const handledByAutomation = await tryHandleAutomation(trimmed);
     if (!handledByAutomation) {
@@ -873,13 +977,80 @@ export default function CommandConsole() {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to process command";
         setMessages((prev) => [...prev, createMessage({ role: "system", content: `Error: ${message}` })]);
+        setAutoScrollEnabled(true);
         toast({ title: "Unable to route message", description: message, variant: "destructive" });
       }
     }
     setInput("");
+    setMentionQuery(null);
+    setMentionIndex(0);
+  };
+
+  const insertMention = useCallback(
+    (agent: AgentRecord) => {
+      const element = inputRef.current;
+      if (!element) return;
+      const cursor = element.selectionStart ?? input.length;
+      const textBefore = input.slice(0, cursor);
+      const textAfter = input.slice(cursor);
+      const match = textBefore.match(/@[\w-]*$/);
+      if (!match) return;
+      const mentionStart = textBefore.lastIndexOf("@");
+      const beforeMention = input.slice(0, mentionStart);
+      const mentionText = `@${agent.id} `;
+      const nextValue = `${beforeMention}${mentionText}${textAfter}`;
+      setInput(nextValue);
+      setMentionQuery(null);
+      setMentionIndex(0);
+      requestAnimationFrame(() => {
+        const caret = beforeMention.length + mentionText.length;
+        element.focus();
+        element.setSelectionRange(caret, caret);
+      });
+    },
+    [input],
+  );
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const { value, selectionStart } = event.target;
+    setInput(value);
+    const caret = selectionStart ?? value.length;
+    const beforeCaret = value.slice(0, caret);
+    const match = beforeCaret.match(/@([\w-]*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+      setMentionIndex(0);
+    }
   };
 
   const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (mentionQuery !== null && mentionCandidates.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        insertMention(mentionCandidates[mentionIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionQuery(null);
+        setMentionIndex(0);
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       handleSend();
@@ -892,6 +1063,8 @@ export default function CommandConsole() {
       hydratedSessionRef.current = null;
       selectSession(sessionId);
       setHistoryOpen(false);
+      setVisibleCount(MIN_VISIBLE_MESSAGES);
+      setAutoScrollEnabled(true);
     },
     [resetAutomationContext, selectSession],
   );
@@ -901,6 +1074,8 @@ export default function CommandConsole() {
     hydratedSessionRef.current = null;
     createSession();
     setMessages([]);
+    setVisibleCount(MIN_VISIBLE_MESSAGES);
+    setAutoScrollEnabled(true);
     setHistoryOpen(false);
   }, [createSession, resetAutomationContext]);
 
@@ -911,6 +1086,7 @@ export default function CommandConsole() {
       deleteSession(sessionId);
       if (sessionId === currentSessionId) {
         setMessages([]);
+        setVisibleCount(MIN_VISIBLE_MESSAGES);
       }
     },
     [currentSessionId, deleteSession, resetAutomationContext],
@@ -1038,7 +1214,11 @@ export default function CommandConsole() {
             New chat
           </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-8">
+        <div
+          className="flex-1 overflow-y-auto p-8"
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+        >
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full space-y-6 animate-fade-in">
               <div className="flex items-center gap-2">
@@ -1064,7 +1244,12 @@ export default function CommandConsole() {
             </div>
           ) : (
             <div className="max-w-3xl mx-auto space-y-8">
-              {messages.map((message) => {
+              {visibleCount < messages.length && (
+                <div className="flex justify-center">
+                  <span className="text-xs text-muted-foreground">Scroll up to load previous messages…</span>
+                </div>
+              )}
+              {displayedMessages.map((message) => {
                 if (message.role === "user") {
                   return (
                     <div key={message.id} className="flex justify-end animate-fade-in">
@@ -1162,11 +1347,12 @@ export default function CommandConsole() {
                 <input
                   type="text"
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={handleInputChange}
                   onKeyDown={handleKeyPress}
                   placeholder="Ask Atlas Core or route with @agent..."
                   className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
                   disabled={isTyping}
+                  ref={inputRef}
                 />
                 <button
                   className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50"
@@ -1191,6 +1377,35 @@ export default function CommandConsole() {
                   <Mic className="h-5 w-5" />
                 </Button>
               </div>
+              {mentionQuery !== null && (
+                <div className="absolute left-16 right-16 bottom-full z-10 mb-2 rounded-2xl border border-border/60 bg-background/95 backdrop-blur-xl shadow-lg">
+                  {mentionCandidates.length > 0 ? (
+                    <ul className="py-2">
+                      {mentionCandidates.map((agent, index) => (
+                        <li key={agent.id}>
+                          <button
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              insertMention(agent);
+                            }}
+                            className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${
+                              index === mentionIndex
+                                ? "bg-muted/60 text-foreground"
+                                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                            }`}
+                          >
+                            <span className="font-medium text-foreground">{agent.name}</span>
+                            <span className="text-xs uppercase tracking-wide text-muted-foreground">{agent.role}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="px-4 py-3 text-sm text-muted-foreground">No matching agents</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

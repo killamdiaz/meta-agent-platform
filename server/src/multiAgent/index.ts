@@ -3,6 +3,7 @@ import { MessageBroker } from './MessageBroker.js';
 import { ConversationGovernor } from '../core/conversation-governor.js';
 import { CoreOrchestrator } from '../core/orchestrator.js';
 import { setCoreOrchestrator } from '../core/orchestrator-registry.js';
+import { MetaCortexBus } from './MetaCortexBus.js';
 
 export const agentBroker = new MessageBroker();
 export const agentRegistry = new AgentRegistry(agentBroker);
@@ -22,11 +23,52 @@ export const conversationGovernor = new ConversationGovernor(DEFAULT_GOVERNOR_PO
 export const coreOrchestrator = new CoreOrchestrator(agentBroker, conversationGovernor);
 setCoreOrchestrator(coreOrchestrator);
 
+const metaAgentIdEnv =
+  process.env.META_AGENT_ID ?? process.env.NEXT_PUBLIC_META_AGENT_ID ?? process.env.VITE_META_AGENT_ID;
+const metaAgentSecretEnv = process.env.META_AGENT_SECRET;
+const metaAgentTokenEnv =
+  process.env.META_AGENT_JWT ?? process.env.META_AGENT_TOKEN ?? process.env.ATLAS_BRIDGE_TOKEN ?? '';
+const notificationConfig =
+  metaAgentIdEnv && metaAgentSecretEnv && metaAgentTokenEnv.trim().length > 0
+    ? {
+        agentId: metaAgentIdEnv,
+        secret: metaAgentSecretEnv,
+        token: metaAgentTokenEnv.trim(),
+        baseUrl: process.env.ATLAS_BRIDGE_BASE_URL,
+        defaultCacheTtlMs: 0,
+      }
+    : null;
+
+if (!notificationConfig) {
+  if (metaAgentIdEnv && metaAgentSecretEnv) {
+    console.warn(
+      '[meta-cortex-bus] Atlas Bridge notifications disabled; set META_AGENT_JWT (or META_AGENT_TOKEN/ATLAS_BRIDGE_TOKEN) to enable.',
+    );
+  } else {
+    console.warn(
+      '[meta-cortex-bus] Missing META_AGENT_ID/META_AGENT_SECRET; Atlas Bridge notifications are disabled.',
+    );
+  }
+}
+
+export const metaCortexBus = new MetaCortexBus(agentBroker, {
+  memoryAgentId: process.env.MEMORY_GRAPH_AGENT_ID ?? 'memory-graph-agent',
+  ...(notificationConfig ? { notification: notificationConfig } : {}),
+});
+
 export { AgentRegistry } from './AgentRegistry.js';
 export { MessageBroker } from './MessageBroker.js';
 export { BaseAgent } from './BaseAgent.js';
 export { SlackBotAgent } from './agents/SlackBotAgent.js';
 export { RAGAgent } from './agents/RAGAgent.js';
+export { MemoryGraphAgent } from './agents/MemoryGraphAgent.js';
+export { TaskAgent } from './agents/TaskAgent.js';
+export { CalendarAgent } from './agents/CalendarAgent.js';
+export { FinanceAgent } from './agents/FinanceAgent.js';
+export { EmailMonitoringAgent } from './agents/EmailMonitoringAgent.js';
+export { AISummarizerAgent } from './agents/AISummarizerAgent.js';
+export { AnalyticsAgent } from './agents/AnalyticsAgent.js';
+export { MetaControllerAgent } from './agents/MetaControllerAgent.js';
 
 export type {
   AgentMessage,

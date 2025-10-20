@@ -79,9 +79,11 @@ export function AppSidebar() {
       {/* Logo */}
       <div className="flex h-16 items-center px-6">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded flex items-center justify-center">
-            <div className="w-6 h-6 rounded bg-foreground" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="Atlas Forge logo"
+            className="h-8 w-8 rounded-md object-cover shadow-sm"
+          />
           <span className="text-xl font-semibold text-foreground">Atlas Forge</span>
         </div>
       </div>

@@ -713,7 +713,7 @@ export default function AgentNetwork() {
   const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
   const [lassoRect, setLassoRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [lassoActive, setLassoActive] = useState(false);
-  const [lassoEnabled, setLassoEnabled] = useState(true);
+  const [lassoEnabled, setLassoEnabled] = useState(false);
   const [promptInput, setPromptInput] = useState("");
   const [isPromptSubmitting, setPromptSubmitting] = useState(false);
   const [promptStatus, setPromptStatus] = useState<string | null>(null);
@@ -1584,7 +1584,21 @@ export default function AgentNetwork() {
     }));
 
     return [START_NODE, ...pipelineNodes, ...agentNodes];
-  }, [agents, automationPipeline, graphAgents, positions, selectedAgentId, selectedAgents]);
+  }, [agents, automationPipeline, graphAgents, positions, selectedAgentId, selectedAgentsSet]);
+
+  useEffect(() => {
+    if (!reactFlowInstance || nodes.length === 0) {
+      return;
+    }
+    const rafId = requestAnimationFrame(() => {
+      try {
+        reactFlowInstance.fitView({ padding: 0.35, includeHiddenNodes: true, duration: 300 });
+      } catch (error) {
+        console.warn("[agent-network] fitView failed", error);
+      }
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [nodes, reactFlowInstance]);
 
   const dynamicEdges = useMemo(() => {
     const agentIds = new Set(agents.map((agent) => agent.id));
@@ -2505,12 +2519,22 @@ export default function AgentNetwork() {
           onNodeDragStop={onNodeDragStop}
           onPaneClick={onPaneClick}
           onMove={onMove}
-      nodeTypes={nodeTypes}
-      fitView
-      className="bg-[#0b0b0f] dot-grid-background"
-      onInit={setReactFlowInstance}
-      panOnDrag={!lassoEnabled}
-      selectionOnDrag={lassoEnabled}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.35, includeHiddenNodes: true }}
+          className="bg-[#0b0b0f] dot-grid-background"
+          onInit={(instance) => {
+            setReactFlowInstance(instance);
+            requestAnimationFrame(() => {
+              try {
+                instance.fitView({ padding: 0.35, includeHiddenNodes: true, duration: 300 });
+              } catch (error) {
+                console.warn("[agent-network] initial fitView failed", error);
+              }
+            });
+          }}
+          panOnDrag={!lassoEnabled}
+          selectionOnDrag={lassoEnabled}
         >
           <Background
             variant={BackgroundVariant.Dots}

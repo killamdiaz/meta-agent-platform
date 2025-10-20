@@ -226,8 +226,9 @@ export class SlackClient {
       const chunk = channelIds.slice(index, index + chunkSize);
       const results = await Promise.allSettled(
         chunk.map(async (channelId) => {
-          const oldestCheckpoint = this.lastMentionPerChannel.get(channelId) ?? this.lastMentionTimestamp ?? this.startupTimestamp;
-          const oldest = oldestCheckpoint ? String(oldestCheckpoint) : undefined;
+          const channelCheckpoint = this.lastMentionPerChannel.get(channelId);
+          const oldestCheckpoint = channelCheckpoint ?? this.startupTimestamp;
+          const oldest = oldestCheckpoint ? String(Math.max(0, oldestCheckpoint - 0.25)) : undefined;
           let history;
           try {
             history = await this.client.conversations.history({
@@ -274,7 +275,7 @@ export class SlackClient {
                     message: reply,
                     channelId,
                     botUserId,
-                    oldestCheckpoint,
+                  oldestCheckpoint,
                     mentions,
                     processed,
                   });

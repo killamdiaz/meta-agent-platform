@@ -11,8 +11,17 @@ import { config } from '../config.js';
 import { getCoreOrchestrator } from '../core/orchestrator-registry.js';
 import type { GovernedMessage } from '../core/orchestrator.js';
 import { routeMessage } from '../llm/router.js';
+import {
+  AtlasBridgeClient,
+  type AtlasBridgeClientOptions,
+  type AtlasBridgeRequestOptions,
+} from '../core/atlas/BridgeClient.js';
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
+
+export interface BaseAgentBridgeOptions extends Omit<AtlasBridgeClientOptions, 'agentId'> {
+  agentId?: string;
+}
 
 export interface BaseAgentOptions {
   id: string;
@@ -26,6 +35,7 @@ export interface BaseAgentOptions {
   connections?: string[];
   aliases?: string[];
   onStateChange?: (change: AgentStateChange) => void;
+  bridge?: BaseAgentBridgeOptions;
 }
 
 export interface AgentMemoryEntry {
@@ -102,6 +112,8 @@ export abstract class BaseAgent {
   private autonomyTimer: NodeJS.Timeout | null = null;
   private talking = false;
   private flushingFollowUps = false;
+  private atlasBridgeClient: AtlasBridgeClient | null = null;
+  private bridgeAgentId?: string;
 
   protected constructor(options: BaseAgentOptions) {
     this.id = options.id;
@@ -122,6 +134,10 @@ export abstract class BaseAgent {
         this.registerTopicAlias(alias);
       }
     }
+
+    if (options.bridge) {
+      this.configureAtlasBridge(options.bridge);
+    }
   }
 
   get isTalking(): boolean {
@@ -130,6 +146,131 @@ export abstract class BaseAgent {
 
   get connections(): string[] {
     return Array.from(this.connectionSet).filter(Boolean);
+  }
+
+  protected configureAtlasBridge(options: BaseAgentBridgeOptions): void {
+    const { agentId, ...rest } = options;
+    const candidateId = String(agentId ?? '').trim();
+    const resolvedAgentId =
+      candidateId.length > 0 && candidateId.toLowerCase() !== 'undefined' ? candidateId : this.id;
+    try {
+      const clientOptions: AtlasBridgeClientOptions = {
+        ...(rest as Omit<AtlasBridgeClientOptions, 'agentId'>),
+        agentId: resolvedAgentId,
+      };
+      this.atlasBridgeClient = new AtlasBridgeClient(clientOptions);
+      this.bridgeAgentId = resolvedAgentId;
+    } catch (error) {
+      console.warn(`[agent:${this.id}] failed to initialise Atlas bridge client`, {
+        error,
+        agentId: resolvedAgentId,
+      });
+      this.atlasBridgeClient = null;
+      this.bridgeAgentId = undefined;
+    }
+  }
+
+  protected hasAtlasBridge(): boolean {
+    return this.atlasBridgeClient !== null;
+  }
+
+  protected getAtlasBridgeAgentId(): string | undefined {
+    return this.bridgeAgentId;
+  }
+
+  protected setAtlasBridgeTokenProvider(provider?: () => Promise<string> | string) {
+    this.atlasBridgeClient?.setTokenProvider(provider);
+  }
+
+  protected updateAtlasBridgeToken(token: string | null | undefined) {
+    if (!this.atlasBridgeClient) return;
+    this.atlasBridgeClient.setToken(token);
+  }
+
+  protected clearAtlasBridgeCache(pathPrefix?: string) {
+    this.atlasBridgeClient?.clearCache(pathPrefix);
+  }
+
+  protected getMessageEventType(message: AgentMessage): string | null {
+    const metadata = message.metadata ?? {};
+    if (!metadata || typeof metadata !== 'object') {
+      return null;
+    }
+    const candidate =
+      (typeof (metadata as Record<string, unknown>).eventType === 'string'
+        ? (metadata as Record<string, unknown>).eventType
+        : undefined) ??
+      (typeof (metadata as Record<string, unknown>).intent === 'string'
+        ? (metadata as Record<string, unknown>).intent
+        : undefined);
+    if (!candidate) {
+      return null;
+    }
+    const trimmed = (candidate as string).trim().toLowerCase();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  protected getMessagePayload<T = unknown>(message: AgentMessage): T | undefined {
+    const metadata = message.metadata ?? {};
+    if (metadata && typeof metadata === 'object' && 'payload' in metadata) {
+      return (metadata as { payload?: T }).payload;
+    }
+    return undefined;
+  }
+
+  protected async callBridge<T>(options: AtlasBridgeRequestOptions): Promise<T> {
+    const bridge = this.ensureAtlasBridge();
+    return bridge.request<T>(options);
+  }
+
+  protected async callAtlas<T>(
+    path: string,
+    method: AtlasBridgeRequestOptions['method'] = 'GET',
+    body?: unknown,
+    options?: Omit<AtlasBridgeRequestOptions, 'path' | 'method' | 'body'>,
+  ): Promise<T> {
+    const request: AtlasBridgeRequestOptions = {
+      path,
+      method,
+      ...(options ?? {}),
+    };
+    if (body !== undefined) {
+      request.body = body;
+    }
+    return this.callBridge<T>(request);
+  }
+
+  protected async requestHelp(
+    targetAgentId: string,
+    query: string | Record<string, unknown>,
+    metadata?: Record<string, unknown>,
+  ): Promise<AgentMessage> {
+    if (!targetAgentId || targetAgentId === this.id) {
+      throw new Error('requestHelp requires a different target agent id.');
+    }
+    const content = typeof query === 'string' ? query : JSON.stringify(query, null, 2);
+    const payloadMetadata =
+      typeof query === 'string'
+        ? { prompt: query }
+        : { ...query };
+    const mergedMetadata: Record<string, unknown> = {
+      eventType: 'request_context',
+      intent: 'request_context',
+      requestedBy: this.id,
+      ...(metadata ?? {}),
+      payload: payloadMetadata,
+    };
+    if (this.bridgeAgentId) {
+      mergedMetadata.bridgeAgentId = this.bridgeAgentId;
+    }
+    return this.sendMessage(targetAgentId, 'task', content, mergedMetadata);
+  }
+
+  private ensureAtlasBridge(): AtlasBridgeClient {
+    if (!this.atlasBridgeClient) {
+      throw new Error(`Agent ${this.id} is not configured with an Atlas bridge client.`);
+    }
+    return this.atlasBridgeClient;
   }
 
   receiveMessage(message: AgentMessage) {
