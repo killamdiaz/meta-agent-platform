@@ -81,6 +81,8 @@ export function AutomationDrawer({ open, onClose, pipeline, sessionId, status }:
       index: index + 1,
       agent: node.agent,
       type: node.type,
+      status: node.metadata?.status as string | undefined,
+      atlasModule: node.metadata?.atlasModule as string | undefined,
     }));
   }, [pipeline]);
 
@@ -126,14 +128,33 @@ export function AutomationDrawer({ open, onClose, pipeline, sessionId, status }:
                   Describe an automation in the console to populate the canvas.
                 </p>
               ) : (
-                steps.map((step) => (
-                  <div key={step.index} className="rounded-xl border border-border/50 bg-background/70 p-3 text-sm">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                      Step {step.index}
+                steps.map((step) => {
+                  const isAtlasAgent = (step.type ?? "").toLowerCase().includes("atlas");
+                  return (
+                    <div key={step.index} className="rounded-xl border border-border/50 bg-background/70 p-3 text-sm space-y-1.5">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                        Step {step.index}
+                      </div>
+                      <div className="font-medium text-foreground flex items-center gap-2">
+                        {formatNodeLabel(step)}
+                        {isAtlasAgent && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-atlas-success/90">
+                            <span className="h-1.5 w-1.5 rounded-full bg-atlas-success animate-pulse-glow" />
+                            Atlas Connected
+                          </span>
+                        )}
+                      </div>
+                      {step.atlasModule && (
+                        <div className="text-[11px] text-muted-foreground/80">
+                          Module: <span className="text-foreground/90">{step.atlasModule}</span>
+                        </div>
+                      )}
+                      {step.status && (
+                        <div className="text-[11px] text-atlas-success/90">{step.status}</div>
+                      )}
                     </div>
-                    <div className="mt-1 font-medium text-foreground">{formatNodeLabel(step)}</div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

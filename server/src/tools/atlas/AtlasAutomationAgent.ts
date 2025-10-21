@@ -1,5 +1,6 @@
 import type { AgentMessage } from '../../multiAgent/MessageBroker.js';
 import { BaseAgent, type BaseAgentOptions } from '../../multiAgent/BaseAgent.js';
+import { buildAtlasBridgeOptions } from './bridge-env.js';
 
 export interface AtlasAutomationAgentOptions extends BaseAgentOptions {
   agentType: string;
@@ -37,10 +38,12 @@ export class AtlasAutomationAgent extends BaseAgent {
     const defaultRole = `${shortName} Automation Agent`;
     const description =
       baseOptions.description ?? DEFAULT_DESCRIPTIONS[normalised] ?? 'Atlas OS automation module agent.';
+    const bridge = buildAtlasBridgeOptions(baseOptions.id, baseOptions.bridge);
     super({
       ...baseOptions,
       role: baseOptions.role?.trim() || defaultRole,
       description,
+      bridge,
     });
     this.agentType = normalised;
     this.config = config;

@@ -7,6 +7,8 @@ import { metaController } from './MetaController.js';
 import { webTool, type WebToolResult } from '../tools/webTool.js';
 import { agentConfigService, type AgentConfigField } from '../services/AgentConfigService.js';
 import { toolRuntime } from '../multiAgent/ToolRuntime.js';
+import { AtlasBridgeClient } from './atlas/BridgeClient.js';
+import { buildAtlasBridgeOptions } from '../tools/atlas/bridge-env.js';
 
 export interface TaskRecord {
   id: string;
@@ -472,6 +474,118 @@ export class AgentManager {
     );
   }
 
+  private resolveAtlasAgentType(agent: AgentRecord): string | null {
+    const candidates = [agent.agent_type, agent.role, agent.name]
+      .map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
+      .filter(Boolean);
+    const match = candidates.find((value) => value.includes('atlas'));
+    return match ?? null;
+  }
+
+  private async collectAtlasContext(agent: AgentRecord, prompt: string): Promise<string | null> {
+    const agentType = this.resolveAtlasAgentType(agent);
+    if (!agentType) {
+      return null;
+    }
+
+    const bridgeOptions = buildAtlasBridgeOptions(agent.id);
+    if (!bridgeOptions.secret || !bridgeOptions.token) {
+      console.warn('[agent-manager] atlas credentials missing for agent', {
+        agentId: agent.id,
+        agentType,
+      });
+      return null;
+    }
+
+    const client = new AtlasBridgeClient({
+      agentId: bridgeOptions.agentId ?? agent.id,
+      secret: bridgeOptions.secret,
+      token: bridgeOptions.token,
+      baseUrl: bridgeOptions.baseUrl,
+      tokenProvider: bridgeOptions.tokenProvider,
+      defaultCacheTtlMs: 0,
+    });
+
+    const type = agentType;
+
+    const fetchJson = async (path: string, query?: Record<string, string | number | boolean | undefined>) => {
+      const data = await client.request<{ [key: string]: unknown }>({ path, method: 'GET', query, skipCache: true });
+      return JSON.stringify(data, null, 2);
+    };
+
+    try {
+      if (type.includes('invoice') || type.includes('finance')) {
+        const invoices = await fetchJson('/bridge-invoices', { limit: 10 });
+        return `Atlas invoices snapshot:
+${invoices}`;
+      }
+
+      if (type.includes('contract')) {
+        const contracts = await fetchJson('/bridge-contracts', { limit: 10 });
+        return `Atlas contracts snapshot:
+${contracts}`;
+      }
+
+      if (type.includes('task')) {
+        const tasks = await fetchJson('/bridge-tasks', { limit: 10 });
+        return `Atlas task snapshot:
+${tasks}`;
+      }
+
+      if (type.includes('calendar') || type.includes('meeting')) {
+        const tasks = await fetchJson('/bridge-tasks', { limit: 5, tag: 'meeting' });
+        return `Atlas meeting tasks snapshot:
+${tasks}`;
+      }
+
+      if (type.includes('analytics')) {
+        const invoices = await fetchJson('/bridge-invoices', { limit: 10 });
+        const contracts = await fetchJson('/bridge-contracts', { limit: 10 });
+        const tasks = await fetchJson('/bridge-tasks', { limit: 10 });
+        return `Atlas analytics snapshot:
+Invoices:
+${invoices}
+
+Contracts:
+${contracts}
+
+Tasks:
+${tasks}`;
+      }
+
+      if (type.includes('memory')) {
+        const summary = await fetchJson('/bridge-user-summary');
+        return `Atlas workspace summary:
+${summary}`;
+      }
+
+      if (type.includes('notify')) {
+        const summary = await fetchJson('/bridge-user-summary');
+        return `Atlas workspace summary:
+${summary}`;
+      }
+
+      if (type.includes('workspace') || type.includes('bridge')) {
+        const summary = await fetchJson('/bridge-user-summary');
+        const status = await fetchJson('/fetch-status');
+        return `Atlas workspace summary:
+${summary}
+
+Service status:
+${status}`;
+      }
+    } catch (error) {
+      console.warn('[agent-manager] failed to load atlas context', {
+        agentId: agent.id,
+        agentType,
+        error,
+      });
+      return null;
+    }
+
+    return null;
+  }
+
   async handleTask(task: TaskRecord) {
     let agentRecord: AgentRecord | null = null;
 
@@ -503,6 +617,20 @@ export class AgentManager {
       }
 
       let augmentedPrompt = task.prompt;
+      const atlasContext = await this.collectAtlasContext(agentRecord, task.prompt);
+      if (atlasContext) {
+        augmentedPrompt = [
+          task.prompt,
+          '',
+          'Atlas Workspace Context:',
+          atlasContext,
+        ].join('\n');
+        this.emitTaskEvent(task.id, {
+          type: 'log',
+          message: `${agent.name} pulled live Atlas data to inform the response.`,
+          agent: agentRecord,
+        });
+      }
       const researchQueries = agent.internetEnabled ? AgentManager.deriveResearchQueries(task.prompt) : [];
 
       if (!agent.internetEnabled && researchQueries.length > 0) {

@@ -1,5 +1,6 @@
 import type { AgentMessage } from '../MessageBroker.js';
 import { BaseAgent, type BaseAgentOptions } from '../BaseAgent.js';
+import { buildAtlasBridgeOptions } from '../../tools/atlas/bridge-env.js';
 
 export interface AtlasModuleAgentOptions extends BaseAgentOptions {
   endpoints: string[];
@@ -11,8 +12,13 @@ export abstract class AtlasModuleAgent extends BaseAgent {
   protected readonly managedEndpoints: string[];
 
   constructor(options: AtlasModuleAgentOptions) {
-    super(options);
-    this.managedEndpoints = [...options.endpoints];
+    const { endpoints, ...baseOptions } = options;
+    const bridge = buildAtlasBridgeOptions(baseOptions.id, baseOptions.bridge);
+    super({
+      ...baseOptions,
+      bridge,
+    });
+    this.managedEndpoints = [...endpoints];
   }
 
   protected getManagedEndpoints(): string[] {

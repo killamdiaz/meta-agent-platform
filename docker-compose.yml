@@ -1,9 +1,6 @@
-version: "3.9"
-
 services:
   db:
     image: ankane/pgvector:latest
-
     restart: unless-stopped
     env_file:
       - .env
@@ -18,7 +15,9 @@ services:
 
   server:
     build: ./server
-    restart: unless-stopped
+    # Limit runaway memory and restart safely
+    command: ["node", "--max-old-space-size=4096", "dist/server.js"]
+    restart: always
     depends_on:
       - db
     env_file:
@@ -27,12 +26,26 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       COORDINATOR_INTERVAL_MS: ${COORDINATOR_INTERVAL_MS:-10000}
+      META_AGENT_SECRET: ${META_AGENT_SECRET}
+      META_AGENT_TOKEN: ${META_AGENT_TOKEN}
+      META_AGENT_ID: ${META_AGENT_ID:-forge}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
     ports:
       - "4000:4000"
+    volumes:
+      # Persist registry to avoid re-initialization each run
+      - ./registry:/app/registry
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   frontend:
     build: ./meta-agent-platform-ui
     command: npm run dev -- --host 0.0.0.0 --port 8080
+    restart: unless-stopped
     depends_on:
       - server
     env_file:
@@ -55,6 +68,7 @@ services:
     build: ./forge
     depends_on:
       - server
+    restart: unless-stopped
     env_file:
       - .env
     environment:

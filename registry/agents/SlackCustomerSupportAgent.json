@@ -1,0 +1,17 @@
+{
+  "agentType": "SlackCustomerSupportAgent",
+  "name": "Slack Customer Support Agent",
+  "description": "Listens to Slack mentions and responds to user queries.",
+  "role": "support",
+  "privilegeLevel": "tool",
+  "capabilities": [
+    "listen_mentions",
+    "respond"
+  ],
+  "safeActions": [
+    "SEND_MESSAGE"
+  ],
+  "commandScope": [
+    "slack"
+  ]
+}
