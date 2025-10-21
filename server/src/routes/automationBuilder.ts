@@ -83,7 +83,7 @@ router.post('/interpret', async (req, res, next) => {
       ...context,
       pipeline: normalizedPipeline,
     });
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     next(error);
   }
@@ -93,7 +93,7 @@ router.post('/message', async (req, res, next) => {
   try {
     const payload = messageSchema.parse(req.body);
     const result = await automationSessionManager.processMessage(payload);
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     next(error);
   }
@@ -108,7 +108,7 @@ router.post('/key', async (req, res, next) => {
       sessionId: payload.sessionId,
       agent: payload.agent as AutomationAgentName,
     });
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     next(error);
   }
@@ -117,15 +117,15 @@ router.post('/key', async (req, res, next) => {
 router.get('/events', (req, res) => {
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
   if (!sessionId) {
-    res.status(400).json({ message: 'sessionId query parameter is required' });
-    return;
+    return res.status(400).json({ message: 'sessionId query parameter is required' });
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
 
   const send = (event: string, payload: unknown) => {
     if (res.writableEnded) return;
@@ -167,7 +167,20 @@ router.get('/events', (req, res) => {
     }),
   );
 
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) {
+      return;
+    }
+    res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
+  }, 15000);
+
+  let disposed = false;
   const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    clearInterval(heartbeat);
     for (const unsubscribe of listeners) {
       unsubscribe();
     }
@@ -183,11 +196,10 @@ router.get('/events', (req, res) => {
 router.delete('/session/:sessionId', (req, res) => {
   const sessionId = req.params.sessionId;
   if (!sessionId) {
-    res.status(400).json({ message: 'sessionId is required' });
-    return;
+    return res.status(400).json({ message: 'sessionId is required' });
   }
   automationSessionManager.resetSession(sessionId);
-  res.status(204).end();
+  return res.status(204).end();
 });
 
 export default router;

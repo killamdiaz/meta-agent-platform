@@ -16,7 +16,7 @@ services:
   server:
     build: ./server
     # Limit runaway memory and restart safely
-    command: ["node", "--max-old-space-size=4096", "dist/server.js"]
+    command: ["node", "--max-old-space-size=2048", "dist/index.js"]
     restart: always
     depends_on:
       - db

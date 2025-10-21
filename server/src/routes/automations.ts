@@ -19,7 +19,7 @@ router.get('/', async (_req, res, next) => {
          FROM automations
         ORDER BY created_at DESC`
     );
-    res.json({ items: rows });
+    return res.json({ items: rows });
   } catch (error) {
     next(error);
   }
@@ -34,7 +34,7 @@ router.post('/', async (req, res, next) => {
        RETURNING id, name, automation_type, metadata, created_at, updated_at`,
       [payload.name, payload.automation_type, JSON.stringify(payload.metadata ?? {})]
     );
-    res.status(201).json(rows[0]);
+    return res.status(201).json(rows[0]);
   } catch (error) {
     next(error);
   }
@@ -55,10 +55,9 @@ router.put('/:automationId', async (req, res, next) => {
       [automationId, payload.name, payload.automation_type, JSON.stringify(payload.metadata ?? {})]
     );
     if (!rows.length) {
-      res.status(404).json({ message: 'Automation not found' });
-      return;
+      return res.status(404).json({ message: 'Automation not found' });
     }
-    res.json(rows[0]);
+    return res.json(rows[0]);
   } catch (error) {
     next(error);
   }

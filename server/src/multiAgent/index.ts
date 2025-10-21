@@ -4,6 +4,7 @@ import { ConversationGovernor } from '../core/conversation-governor.js';
 import { CoreOrchestrator } from '../core/orchestrator.js';
 import { setCoreOrchestrator } from '../core/orchestrator-registry.js';
 import { MetaCortexBus } from './MetaCortexBus.js';
+import { configureAtlasBridgePolling } from '../services/AtlasBridgePoller.js';
 
 export const agentBroker = new MessageBroker();
 export const agentRegistry = new AgentRegistry(agentBroker);
@@ -50,6 +51,18 @@ if (!notificationConfig) {
     );
   }
 }
+
+configureAtlasBridgePolling(
+  notificationConfig
+    ? {
+        agentId: notificationConfig.agentId,
+        secret: notificationConfig.secret,
+        token: notificationConfig.token,
+        baseUrl: notificationConfig.baseUrl,
+        defaultCacheTtlMs: notificationConfig.defaultCacheTtlMs ?? 0,
+      }
+    : undefined,
+);
 
 export const metaCortexBus = new MetaCortexBus(agentBroker, {
   memoryAgentId: process.env.MEMORY_GRAPH_AGENT_ID ?? 'memory-graph-agent',

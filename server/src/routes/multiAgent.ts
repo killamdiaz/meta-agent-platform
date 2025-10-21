@@ -20,18 +20,19 @@ router.post('/sessions', async (req, res, next) => {
     const { prompt } = sessionSchema.parse(req.body);
     const orchestrator = new MultiAgentOrchestrator(new MemoryStore());
     const session = await orchestrator.runSession(prompt);
-    res.json(session);
+    return res.json(session);
   } catch (error) {
     next(error);
   }
 });
 
 router.get('/sessions/stream', async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
 
   const send = (event: string, payload: unknown) => {
     if (res.writableEnded) return;
@@ -43,6 +44,13 @@ router.get('/sessions/stream', async (req, res) => {
 
   let closed = false;
   req.on('close', () => {
+    closed = true;
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+
+  req.on('end', () => {
     closed = true;
     if (!res.writableEnded) {
       res.end();
@@ -66,6 +74,7 @@ router.get('/sessions/stream', async (req, res) => {
         });
         if (!closed) {
           send('close', { ok: true });
+          closed = true;
           res.end();
         }
       },
@@ -73,6 +82,7 @@ router.get('/sessions/stream', async (req, res) => {
   } catch (error) {
     send('error', { message: error instanceof Error ? error.message : 'Unknown error' });
     if (!res.writableEnded) {
+      closed = true;
       res.end();
     }
   }
@@ -82,18 +92,19 @@ router.get('/memory', async (_req, res, next) => {
   try {
     const memoryStore = new MemoryStore();
     await memoryStore.initialise();
-    res.json(memoryStore.getSnapshot());
+    return res.json(memoryStore.getSnapshot());
   } catch (error) {
     next(error);
   }
 });
 
-router.get('/events', async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+router.get('/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
 
   const send = (event: string, payload: unknown) => {
     if (res.writableEnded) return;
@@ -112,7 +123,20 @@ router.get('/events', async (req, res) => {
   const unsubscribeState = agentBroker.onStateChange((update) => send('state', update));
   const unsubscribeTokens = agentBroker.onTokenUsage((usage) => send('tokens', usage));
 
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) {
+      return;
+    }
+    res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
+  }, 15000);
+
+  let cleanedUp = false;
   const dispose = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    clearInterval(heartbeat);
     unsubscribeGraph();
     unsubscribeMessage();
     unsubscribeState();
@@ -128,14 +152,13 @@ router.get('/events', async (req, res) => {
 
 router.get('/tool-agents', (_req, res) => {
   const agents = toolRuntime.describeAgents();
-  res.json({ items: agents });
+  return res.json({ items: agents });
 });
 
 router.get('/tool-agents/:agentId/logs', (req, res) => {
   const agentId = req.params.agentId.trim();
   if (!agentId) {
-    res.status(400).json({ message: 'agentId is required' });
-    return;
+    return res.status(400).json({ message: 'agentId is required' });
   }
 
   const limitParam = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
@@ -158,7 +181,7 @@ router.get('/tool-agents/:agentId/logs', (req, res) => {
     metadata: message.metadata ?? {},
   }));
 
-  res.json({ items: logs });
+  return res.json({ items: logs });
 });
 
 export default router;

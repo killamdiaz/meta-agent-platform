@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import crypto from 'node:crypto';
 
 export type AtlasTokenProvider = () => Promise<string> | string;
@@ -11,6 +12,9 @@ export interface AtlasBridgeClientOptions {
   defaultCacheTtlMs?: number;
   maxRetries?: number;
   retryDelayMs?: number;
+  requestTimeoutMs?: number;
+  maxCacheEntries?: number;
+  maxCacheBytes?: number;
 }
 
 export interface AtlasBridgeRequestOptions {
@@ -25,21 +29,37 @@ export interface AtlasBridgeRequestOptions {
   skipCache?: boolean;
   tag?: string;
   logMessage?: string;
+  requestId?: string;
 }
 
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
+  path: string;
+  size: number;
 }
 
 const DEFAULT_BASE_URL = 'https://lighdepncfhiecqllmod.supabase.co/functions/v1';
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 400;
+const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024; // 32 MB
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 const globalStructuredClone = (globalThis as { structuredClone?: <T>(input: T) => T }).structuredClone;
+
+const serialiseError = (error: unknown) => {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  return error;
+};
 
 const cloneValue = <T>(value: T): T => {
   if (value === undefined || value === null) {
@@ -88,6 +108,10 @@ export class AtlasBridgeClient {
   private readonly defaultCacheTtlMs: number;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
+  private readonly requestTimeoutMs: number;
+  private readonly maxCacheEntries: number;
+  private readonly maxCacheBytes: number;
+  private currentCacheBytes = 0;
 
   constructor(options: AtlasBridgeClientOptions) {
     if (!options.agentId) {
@@ -102,12 +126,73 @@ export class AtlasBridgeClient {
     this.defaultCacheTtlMs = Math.max(0, options.defaultCacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
     this.maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_MAX_RETRIES);
     this.retryDelayMs = Math.max(50, options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+    this.requestTimeoutMs = Math.max(100, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    this.maxCacheEntries = Math.max(1, options.maxCacheEntries ?? 200);
+    const configuredBytes = options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES;
+    this.maxCacheBytes = configuredBytes > 0 ? configuredBytes : DEFAULT_MAX_CACHE_BYTES;
     this.agentId = options.agentId;
     this.secret = options.secret;
   }
 
   private agentId: string;
   private secret: string;
+
+  private logAttempt(details: {
+    attempt: number;
+    status?: number;
+    error?: unknown;
+    endpoint: string;
+    requestId?: string;
+    latencyMs: number;
+  }) {
+    const { attempt, status, error, endpoint, requestId, latencyMs } = details;
+    const base = {
+      component: 'atlas-bridge-client',
+      agentId: this.agentId,
+      endpoint,
+      attempt,
+      latencyMs,
+      requestId: requestId ?? null,
+    };
+    if (error) {
+      console.error({ ...base, level: 'error', status: status ?? null, error: serialiseError(error) });
+    } else {
+      console.log({ ...base, level: 'info', status: status ?? null });
+    }
+  }
+
+  private createTimeoutSignal(signal?: AbortSignal) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error('AtlasBridgeClient request timed out'));
+      }
+    }, this.requestTimeoutMs);
+
+    const abortListener = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(signal?.reason ?? new Error('Upstream request aborted'));
+      }
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        abortListener();
+      } else {
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+    }
+
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', abortListener);
+        }
+      },
+    };
+  }
 
   setToken(token: string | null | undefined) {
     const trimmed = typeof token === 'string' ? token.trim() : '';
@@ -125,6 +210,7 @@ export class AtlasBridgeClient {
     if (!pathPrefix) {
       this.cache.clear();
       this.cacheIndex.clear();
+      this.currentCacheBytes = 0;
       return;
     }
 
@@ -134,9 +220,48 @@ export class AtlasBridgeClient {
         continue;
       }
       for (const key of keys) {
-        this.cache.delete(key);
+        const entry = this.cache.get(key);
+        if (entry) {
+          this.cache.delete(key);
+          this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
+        }
       }
       this.cacheIndex.delete(path);
+    }
+  }
+
+  private cleanupExpiredCache() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.expiresAt <= now) {
+        this.cache.delete(key);
+        this.removeCacheIndexEntry(entry.path, key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
+      }
+    }
+  }
+
+  private removeCacheIndexEntry(path: string, key: string) {
+    const index = this.cacheIndex.get(path);
+    if (!index) {
+      return;
+    }
+    index.delete(key);
+    if (index.size === 0) {
+      this.cacheIndex.delete(path);
+    }
+  }
+
+  private enforceCacheLimit() {
+    while (this.cache.size > this.maxCacheEntries || this.currentCacheBytes > this.maxCacheBytes) {
+      const next = this.cache.entries().next();
+      if (next.done) {
+        break;
+      }
+      const [key, entry] = next.value;
+      this.cache.delete(key);
+      this.removeCacheIndexEntry(entry.path, key);
+      this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
     }
   }
 
@@ -144,6 +269,8 @@ export class AtlasBridgeClient {
     const method = (options.method ?? 'GET').toUpperCase() as AtlasBridgeRequestOptions['method'];
     const descriptor = this.buildCacheDescriptor(method, options);
     const cacheTtl = this.resolveCacheTtl(method, options, descriptor !== null);
+
+    this.cleanupExpiredCache();
 
     if (options.logMessage) {
       console.log(options.logMessage);
@@ -156,17 +283,16 @@ export class AtlasBridgeClient {
       }
       if (cached) {
         this.cache.delete(descriptor.key);
-        const index = this.cacheIndex.get(descriptor.path);
-        index?.delete(descriptor.key);
-        if (index && index.size === 0) {
-          this.cacheIndex.delete(descriptor.path);
-        }
+        this.removeCacheIndexEntry(cached.path, descriptor.key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - cached.size);
       }
     }
 
     const url = this.buildUrl(options.path, options.query);
     const headers = this.buildHeaders(options.headers);
     const body = this.serialiseBody(method, options.body, headers);
+
+    const endpoint = options.tag ?? options.path;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
       let token: string;
@@ -184,13 +310,20 @@ export class AtlasBridgeClient {
       headers['X-Agent-Id'] = this.agentId;
       headers['X-Agent-Signature'] = generateSignature(this.agentId, token, this.secret);
 
+      const attemptStarted = Date.now();
       try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body,
-          signal: options.signal,
-        });
+        const timeout = this.createTimeoutSignal(options.signal);
+        let response: globalThis.Response;
+        try {
+          response = await fetch(url, {
+            method,
+            headers,
+            body,
+            signal: timeout.signal,
+          });
+        } finally {
+          timeout.cleanup();
+        }
 
         const raw = await response.text();
         let payload: unknown = undefined;
@@ -211,6 +344,13 @@ export class AtlasBridgeClient {
           } else if (method !== 'GET') {
             this.clearCache(options.path);
           }
+          this.logAttempt({
+            attempt,
+            status: response.status,
+            endpoint,
+            requestId: options.requestId,
+            latencyMs: Date.now() - attemptStarted,
+          });
           return result;
         }
 
@@ -231,18 +371,43 @@ export class AtlasBridgeClient {
           continue;
         }
 
+        const latency = Date.now() - attemptStarted;
+
         const errorMessage =
           typeof payload === 'object' && payload && 'error' in payload
             ? String((payload as Record<string, unknown>).error ?? 'Atlas Bridge request failed.')
             : `Atlas Bridge request failed with status ${response.status}`;
-        throw new AtlasBridgeError(errorMessage, response.status, payload);
+        const error = new AtlasBridgeError(errorMessage, response.status, payload);
+        this.logAttempt({
+          attempt,
+          status: response.status,
+          endpoint,
+          requestId: options.requestId,
+          latencyMs: latency,
+          error,
+        });
+        throw error;
       } catch (error) {
         if (error instanceof AtlasBridgeError) {
           throw error;
         }
         if (attempt >= this.maxRetries) {
+          this.logAttempt({
+            attempt,
+            endpoint,
+            requestId: options.requestId,
+            latencyMs: Date.now() - attemptStarted,
+            error,
+          });
           throw error;
         }
+        this.logAttempt({
+          attempt,
+          endpoint,
+          requestId: options.requestId,
+          latencyMs: Date.now() - attemptStarted,
+          error,
+        });
         await this.backoff(attempt);
       }
     }
@@ -277,13 +442,55 @@ export class AtlasBridgeClient {
 
   private storeInCache(descriptor: CacheDescriptor, value: unknown, ttlMs: number) {
     const expiresAt = Date.now() + ttlMs;
-    this.cache.set(descriptor.key, { value: cloneValue(value), expiresAt });
+    const cloned = cloneValue(value);
+    const size = this.estimateSize(cloned);
+    const existing = this.cache.get(descriptor.key);
+    if (size > this.maxCacheBytes) {
+      if (existing) {
+        this.cache.delete(descriptor.key);
+        this.removeCacheIndexEntry(existing.path, descriptor.key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - existing.size);
+      }
+      return;
+    }
+    if (existing) {
+      this.currentCacheBytes = Math.max(0, this.currentCacheBytes - existing.size);
+    }
+    this.cache.set(descriptor.key, { value: cloned, expiresAt, path: descriptor.path, size });
+    this.currentCacheBytes += size;
     let index = this.cacheIndex.get(descriptor.path);
     if (!index) {
       index = new Set<string>();
       this.cacheIndex.set(descriptor.path, index);
     }
     index.add(descriptor.key);
+    this.enforceCacheLimit();
+  }
+
+  private estimateSize(value: unknown): number {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    if (typeof value === 'string') {
+      return Buffer.byteLength(value, 'utf8');
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return 8;
+    }
+    if (typeof value === 'bigint') {
+      return 16;
+    }
+    if (ArrayBuffer.isView(value)) {
+      return value.byteLength;
+    }
+    if (value instanceof ArrayBuffer) {
+      return value.byteLength;
+    }
+    try {
+      return Buffer.byteLength(JSON.stringify(value), 'utf8');
+    } catch {
+      return 0;
+    }
   }
 
   private async getToken(forceRefresh = false): Promise<string> {

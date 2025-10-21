@@ -110,6 +110,7 @@ export abstract class BaseAgent {
   private processingLoopActive = false;
   private disposed = false;
   private autonomyTimer: NodeJS.Timeout | null = null;
+  private thinking = false;
   private talking = false;
   private flushingFollowUps = false;
   private atlasBridgeClient: AtlasBridgeClient | null = null;
@@ -362,9 +363,17 @@ export abstract class BaseAgent {
   startAutonomy(intervalMs = 5000) {
     if (this.autonomyTimer) return;
     this.autonomyTimer = setInterval(() => {
-      void this.think().catch((error) => {
-        console.error(`[agent:${this.id}] autonomous thinking failed`, error);
-      });
+      if (this.thinking) {
+        return;
+      }
+      this.thinking = true;
+      void this.think()
+        .catch((error) => {
+          console.error(`[agent:${this.id}] autonomous thinking failed`, error);
+        })
+        .finally(() => {
+          this.thinking = false;
+        });
     }, intervalMs);
     this.teardownCallbacks.push(() => {
       if (this.autonomyTimer) {
@@ -381,6 +390,7 @@ export abstract class BaseAgent {
       clearInterval(this.autonomyTimer);
       this.autonomyTimer = null;
     }
+    this.thinking = false;
     this.inbox.close();
     while (this.teardownCallbacks.length) {
       const cb = this.teardownCallbacks.pop();
