@@ -35,7 +35,7 @@ bridgeRouter.get('/bridge-user-summary', async (req, res, next) => {
   try {
     const agentId = req.agentId as string;
     const data = await fetchBridgeUserSummary(agentId, req.context.requestId);
-    return res.json({ data, requestId: req.context.requestId });
+    res.json({ data, requestId: req.context.requestId });
   } catch (error) {
     next(error);
   }
@@ -46,7 +46,7 @@ bridgeRouter.get('/bridge-invoices', async (req, res, next) => {
     const { page, pageSize } = paginationSchema.parse(req.query);
     const agentId = req.agentId as string;
     const result = await fetchBridgeInvoices(agentId, page, pageSize, req.context.requestId);
-    return res.json({
+    res.json({
       data: result.items,
       pagination: result.pagination,
       requestId: req.context.requestId,
@@ -61,7 +61,7 @@ bridgeRouter.get('/bridge-contracts', async (req, res, next) => {
     const { page, pageSize } = paginationSchema.parse(req.query);
     const agentId = req.agentId as string;
     const result = await fetchBridgeContracts(agentId, page, pageSize, req.context.requestId);
-    return res.json({
+    res.json({
       data: result.items,
       pagination: result.pagination,
       requestId: req.context.requestId,
@@ -82,7 +82,7 @@ bridgeRouter.get('/bridge-tasks', async (req, res, next) => {
       status,
       req.context.requestId,
     );
-    return res.json({
+    res.json({
       data: result.items,
       pagination: result.pagination,
       requestId: req.context.requestId,
@@ -97,7 +97,7 @@ bridgeRouter.post('/bridge-notify', async (req, res, next) => {
     const body = notificationSchema.parse(req.body);
     const agentId = req.agentId as string;
     const result = await recordBridgeNotification(agentId, req.context.requestId, body);
-    return res.json({ ...result, requestId: req.context.requestId });
+    res.json({ ...result, requestId: req.context.requestId });
   } catch (error) {
     next(error);
   }

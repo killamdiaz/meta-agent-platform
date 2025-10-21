@@ -34,7 +34,7 @@ atlasRouter.post('/atlas-ai-agent', async (req, res, next) => {
   try {
     const body = agentRequestSchema.parse(req.body);
     const result = await createAtlasAgentExecution(body, req.context.requestId, req.user?.id ?? 'unknown');
-    return res.json(result);
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -44,7 +44,7 @@ atlasRouter.post('/atlas-ai-stream', async (req, res, next) => {
   try {
     const body = streamRequestSchema.parse(req.body);
     const result = await fetchAtlasStream(body, req.context.requestId, req.agentId ?? body.sessionId);
-    return res.json(result);
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -54,7 +54,7 @@ atlasRouter.post('/contract-operations', async (req, res, next) => {
   try {
     const body = contractOperationSchema.parse(req.body);
     const result = await executeContractOperation(body, req.context.requestId, req.agentId ?? body.contractId);
-    return res.json(result);
+    res.json(result);
   } catch (error) {
     next(error);
   }

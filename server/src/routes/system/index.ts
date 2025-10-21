@@ -22,7 +22,7 @@ systemRouter.get('/check-subscription', async (req, res, next) => {
     const { userId } = subscriptionQuerySchema.parse(req.query);
     const targetUser = userId ?? req.user?.id ?? 'unknown';
     const result = await checkUserSubscription(targetUser, req.context.requestId);
-    return res.json(result);
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -35,7 +35,7 @@ systemRouter.get('/fetch-status', async (req, res, next) => {
     const components = component
       ? result.components.filter((entry: { component: string }) => entry.component === component)
       : result.components;
-    return res.json({ ...result, components });
+    res.json({ ...result, components });
   } catch (error) {
     next(error);
   }
