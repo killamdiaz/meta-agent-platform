@@ -525,6 +525,7 @@ export const CLIENT_BINDINGS: Record<string, ClientBinding> = {
     module: '@supabase/supabase-js',
     env: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'],
     builder: invokeFactory('createClient', (creds) => [creds.SUPABASE_URL, creds.SUPABASE_SERVICE_ROLE_KEY]),
+    aliases: ['meta-controller', 'metacontroller', 'atlas meta-controller agent'],
   },
   firebase: {
     label: 'Firebase',
