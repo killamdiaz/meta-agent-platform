@@ -155,7 +155,7 @@ export class ToolRuntime {
       { match: /\banalytics?\b|\bdashboard\b|\bmetrics\b/i, type: 'AnalyticsAgent' },
       { match: /\bsummar(i[zs]e|y)\b|\bexecutive summary\b/i, type: 'AISummarizerAgent' },
       { match: /\bmemory\b|\bgraph\b/i, type: 'MemoryGraphAgent' },
-      { match: /\bmeta controller\b|\bheartbeat\b/i, type: 'MetaControllerAgent' },
+      { match: /\bmeta[-\s]?controller\b|\bheartbeat\b/i, type: 'MetaControllerAgent' },
     ];
 
     for (const hint of hints) {
