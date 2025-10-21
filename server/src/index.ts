@@ -30,9 +30,11 @@ async function bootstrap() {
   app.use(cors());
   app.use(express.json());
 
-  app.get('/healthz', (_req, res) => {
+  const healthHandler = (_req: express.Request, res: express.Response) => {
     res.json({ status: 'ok' });
-  });
+  };
+
+  app.get(['/health', '/healthz'], healthHandler);
 
   app.use('/agents', agentsRoute);
   app.use('/tasks', tasksRoute);
