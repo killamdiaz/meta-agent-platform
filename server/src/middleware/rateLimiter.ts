@@ -8,6 +8,19 @@ interface RateBucket {
 
 const WINDOW_MS = 60_000;
 const buckets = new Map<string, RateBucket>();
+let lastCleanupAt = 0;
+
+function cleanupExpiredBuckets(now: number) {
+  if (now - lastCleanupAt < WINDOW_MS / 4) {
+    return;
+  }
+  lastCleanupAt = now;
+  for (const [key, bucket] of buckets.entries()) {
+    if (bucket.resetAt <= now) {
+      buckets.delete(key);
+    }
+  }
+}
 
 function resolveAgentId(req: Request): string | null {
   if (req.agentId) {
@@ -34,6 +47,7 @@ export function perAgentRateLimiter(limit = config.rateLimitPerMinute) {
     req.agentId = agentId;
 
     const now = Date.now();
+    cleanupExpiredBuckets(now);
     const existing = buckets.get(agentId);
     if (!existing || existing.resetAt <= now) {
       buckets.set(agentId, { count: 1, resetAt: now + WINDOW_MS });

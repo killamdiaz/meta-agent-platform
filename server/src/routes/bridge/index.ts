@@ -45,17 +45,10 @@ bridgeRouter.get('/bridge-invoices', async (req, res, next) => {
   try {
     const { page, pageSize } = paginationSchema.parse(req.query);
     const agentId = req.agentId as string;
-    const invoices = await fetchBridgeInvoices(agentId, req.context.requestId);
-    const offset = (page - 1) * pageSize;
-    const items = invoices.slice(offset, offset + pageSize);
+    const result = await fetchBridgeInvoices(agentId, page, pageSize, req.context.requestId);
     res.json({
-      data: items,
-      pagination: {
-        page,
-        pageSize,
-        total: invoices.length,
-        pageCount: Math.ceil(invoices.length / pageSize) || 1,
-      },
+      data: result.items,
+      pagination: result.pagination,
       requestId: req.context.requestId,
     });
   } catch (error) {
@@ -67,17 +60,10 @@ bridgeRouter.get('/bridge-contracts', async (req, res, next) => {
   try {
     const { page, pageSize } = paginationSchema.parse(req.query);
     const agentId = req.agentId as string;
-    const contracts = await fetchBridgeContracts(agentId, req.context.requestId);
-    const offset = (page - 1) * pageSize;
-    const items = contracts.slice(offset, offset + pageSize);
+    const result = await fetchBridgeContracts(agentId, page, pageSize, req.context.requestId);
     res.json({
-      data: items,
-      pagination: {
-        page,
-        pageSize,
-        total: contracts.length,
-        pageCount: Math.ceil(contracts.length / pageSize) || 1,
-      },
+      data: result.items,
+      pagination: result.pagination,
       requestId: req.context.requestId,
     });
   } catch (error) {
@@ -89,18 +75,16 @@ bridgeRouter.get('/bridge-tasks', async (req, res, next) => {
   try {
     const { page, pageSize, status } = taskQuerySchema.parse(req.query);
     const agentId = req.agentId as string;
-    const tasks = await fetchBridgeTasks(agentId, req.context.requestId);
-    const filtered = status ? tasks.filter((task) => task.status === status) : tasks;
-    const offset = (page - 1) * pageSize;
-    const items = filtered.slice(offset, offset + pageSize);
+    const result = await fetchBridgeTasks(
+      agentId,
+      page,
+      pageSize,
+      status,
+      req.context.requestId,
+    );
     res.json({
-      data: items,
-      pagination: {
-        page,
-        pageSize,
-        total: filtered.length,
-        pageCount: Math.ceil(filtered.length / pageSize) || 1,
-      },
+      data: result.items,
+      pagination: result.pagination,
       requestId: req.context.requestId,
     });
   } catch (error) {
