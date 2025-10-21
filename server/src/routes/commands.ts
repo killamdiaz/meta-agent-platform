@@ -14,8 +14,7 @@ router.post('/', async (req, res, next) => {
     const { input } = commandSchema.parse(req.body);
     const trimmed = input.trim();
     if (!trimmed) {
-      res.status(400).json({ message: 'Invalid command' });
-      return;
+      return res.status(400).json({ message: 'Invalid command' });
     }
 
     const agents = await agentManager.allAgents();
@@ -39,7 +38,7 @@ router.post('/', async (req, res, next) => {
 
     const enqueue = async (agent: AgentRecord, prompt: string) => {
       const task = await agentManager.addTask(agent.id, prompt);
-      res.json({ message: 'Task enqueued', agent, task });
+      return res.json({ message: 'Task enqueued', agent, task });
     };
 
     if (!trimmed.startsWith('/')) {
@@ -48,41 +47,34 @@ router.post('/', async (req, res, next) => {
         const [identifier, ...rest] = mentionBody.split(/\s+/);
         const agent = identifier ? findAgent(identifier) : undefined;
         if (!agent) {
-          res.status(404).json({ message: `Agent ${identifier || ''} not found` });
-          return;
+          return res.status(404).json({ message: `Agent ${identifier || ''} not found` });
         }
         const remainder = rest.join(' ').trim();
-        await enqueue(agent, remainder || `Run command for ${agent.name}`);
-        return;
+        return enqueue(agent, remainder || `Run command for ${agent.name}`);
       }
 
       if (agents.length === 0) {
-        res.status(404).json({ message: 'No agents available to process this command' });
-        return;
+        return res.status(404).json({ message: 'No agents available to process this command' });
       }
 
       const agent = autoRoute(trimmed);
       if (!agent) {
-        res.status(404).json({ message: 'No matching agent found for the request' });
-        return;
+        return res.status(404).json({ message: 'No matching agent found for the request' });
       }
-      await enqueue(agent, trimmed);
-      return;
+      return enqueue(agent, trimmed);
     }
 
     const tokens = trimmed.split(/\s+/);
     const action = tokens.shift()?.toLowerCase();
     if (!action) {
-      res.status(400).json({ message: 'Invalid command' });
-      return;
+      return res.status(400).json({ message: 'Invalid command' });
     }
 
     switch (action) {
       case '/create': {
         const remainder = input.replace(/^\/create\s+/i, '').trim();
         if (!remainder) {
-          res.status(400).json({ message: 'Agent name required' });
-          return;
+          return res.status(400).json({ message: 'Agent name required' });
         }
         const tools: Record<string, boolean> = {};
         const toolMatch = remainder.match(/with\s+tools?:\s*(.+)$/i);
@@ -97,8 +89,7 @@ router.post('/', async (req, res, next) => {
         const nameRolePart = toolMatch ? remainder.replace(toolMatch[0], '').trim() : remainder;
         const [name, ...roleParts] = nameRolePart.split(/\s+/);
         if (!name) {
-          res.status(400).json({ message: 'Agent name required' });
-          return;
+          return res.status(400).json({ message: 'Agent name required' });
         }
         const role = roleParts.join(' ') || name.replace(/Agent$/i, '') || 'Generalist';
         const agent = await agentManager.createAgent({
@@ -107,14 +98,12 @@ router.post('/', async (req, res, next) => {
           tools,
           objectives: []
         });
-        res.json({ message: 'Agent created', agent });
-        break;
+        return res.json({ message: 'Agent created', agent });
       }
       case '/set': {
         const target = tokens.shift();
         if (target?.toLowerCase() !== 'goal') {
-          res.status(400).json({ message: 'Unknown /set command' });
-          return;
+          return res.status(400).json({ message: 'Unknown /set command' });
         }
         let agentName: string | null = null;
         if (tokens.length && !tokens[0].startsWith('"')) {
@@ -123,46 +112,39 @@ router.post('/', async (req, res, next) => {
         const quoteIndex = input.indexOf('"');
         const goal = quoteIndex >= 0 ? input.substring(quoteIndex).replace(/^"|"$/g, '') : tokens.join(' ');
         if (!goal) {
-          res.status(400).json({ message: 'Goal text required inside quotes' });
-          return;
+          return res.status(400).json({ message: 'Goal text required inside quotes' });
         }
         if (!agentName) {
-          res.status(400).json({ message: 'Specify target agent e.g. /set goal FinanceAgent "..."' });
-          return;
+          return res.status(400).json({ message: 'Specify target agent e.g. /set goal FinanceAgent "..."' });
         }
         const agents = await agentManager.allAgents();
         const targetAgent = agents.find((a: AgentRecord) => a.name.toLowerCase() === agentName!.toLowerCase());
         if (!targetAgent) {
-          res.status(404).json({ message: `Agent ${agentName} not found` });
-          return;
+          return res.status(404).json({ message: `Agent ${agentName} not found` });
         }
         const existing = Array.isArray(targetAgent.objectives)
           ? (targetAgent.objectives as string[])
           : [];
         const objectives = Array.from(new Set([...existing, goal]));
         await agentManager.setAgentObjectives(targetAgent.id, objectives);
-        res.json({ message: 'Goal added', agent: targetAgent.id, objectives });
-        break;
+        return res.json({ message: 'Goal added', agent: targetAgent.id, objectives });
       }
       case '/run': {
         const identifier = tokens.shift();
         if (!identifier) {
-          res.status(400).json({ message: 'Agent identifier required' });
-          return;
+          return res.status(400).json({ message: 'Agent identifier required' });
         }
         const agent = findAgent(identifier);
         if (!agent) {
-          res.status(404).json({ message: `Agent ${identifier} not found` });
-          return;
+          return res.status(404).json({ message: `Agent ${identifier} not found` });
         }
         const quoteIndex = trimmed.indexOf('"');
         const prompt = quoteIndex >= 0 ? trimmed.substring(quoteIndex).replace(/^"|"$/g, '') : tokens.join(' ');
         const task = await agentManager.addTask(agent.id, prompt || `Run command for ${agent.name}`);
-        res.json({ message: 'Task enqueued', agent, task });
-        break;
+        return res.json({ message: 'Task enqueued', agent, task });
       }
       default: {
-        res.status(400).json({ message: `Unknown command ${action}` });
+        return res.status(400).json({ message: `Unknown command ${action}` });
       }
     }
   } catch (error) {

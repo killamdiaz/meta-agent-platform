@@ -167,7 +167,7 @@ router.get('/graph', async (_req, res, next) => {
       strength: task.status === 'completed' ? 0.75 : 0.5
     }));
 
-    res.json({
+    return res.json({
       nodes: [...agentNodes, ...memoryNodes, ...taskNodes],
       links: [...agentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
     });
@@ -197,6 +197,13 @@ router.get('/stream', async (_req, res, next) => {
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
+    const heartbeat = setInterval(() => {
+      if (closed) {
+        return;
+      }
+      res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
+    }, 15000);
+
     const unsubscribe = MemoryService.on((event) => {
       if (event.type === 'created') {
         const memory = event.memory;
@@ -215,6 +222,13 @@ router.get('/stream', async (_req, res, next) => {
 
     _req.on('close', () => {
       unsubscribe();
+      clearInterval(heartbeat);
+      safeEnd();
+    });
+
+    _req.on('end', () => {
+      unsubscribe();
+      clearInterval(heartbeat);
       safeEnd();
     });
   } catch (error) {
