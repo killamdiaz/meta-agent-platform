@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import crypto from 'node:crypto';
 
 export type AtlasTokenProvider = () => Promise<string> | string;
@@ -13,6 +14,7 @@ export interface AtlasBridgeClientOptions {
   retryDelayMs?: number;
   requestTimeoutMs?: number;
   maxCacheEntries?: number;
+  maxCacheBytes?: number;
 }
 
 export interface AtlasBridgeRequestOptions {
@@ -34,6 +36,7 @@ interface CacheEntry<T> {
   value: T;
   expiresAt: number;
   path: string;
+  size: number;
 }
 
 const DEFAULT_BASE_URL = 'https://lighdepncfhiecqllmod.supabase.co/functions/v1';
@@ -41,6 +44,7 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 400;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024; // 32 MB
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
@@ -106,6 +110,8 @@ export class AtlasBridgeClient {
   private readonly retryDelayMs: number;
   private readonly requestTimeoutMs: number;
   private readonly maxCacheEntries: number;
+  private readonly maxCacheBytes: number;
+  private currentCacheBytes = 0;
 
   constructor(options: AtlasBridgeClientOptions) {
     if (!options.agentId) {
@@ -122,6 +128,8 @@ export class AtlasBridgeClient {
     this.retryDelayMs = Math.max(50, options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
     this.requestTimeoutMs = Math.max(100, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     this.maxCacheEntries = Math.max(1, options.maxCacheEntries ?? 200);
+    const configuredBytes = options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES;
+    this.maxCacheBytes = configuredBytes > 0 ? configuredBytes : DEFAULT_MAX_CACHE_BYTES;
     this.agentId = options.agentId;
     this.secret = options.secret;
   }
@@ -202,6 +210,7 @@ export class AtlasBridgeClient {
     if (!pathPrefix) {
       this.cache.clear();
       this.cacheIndex.clear();
+      this.currentCacheBytes = 0;
       return;
     }
 
@@ -211,7 +220,11 @@ export class AtlasBridgeClient {
         continue;
       }
       for (const key of keys) {
-        this.cache.delete(key);
+        const entry = this.cache.get(key);
+        if (entry) {
+          this.cache.delete(key);
+          this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
+        }
       }
       this.cacheIndex.delete(path);
     }
@@ -223,6 +236,7 @@ export class AtlasBridgeClient {
       if (entry.expiresAt <= now) {
         this.cache.delete(key);
         this.removeCacheIndexEntry(entry.path, key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
       }
     }
   }
@@ -239,15 +253,15 @@ export class AtlasBridgeClient {
   }
 
   private enforceCacheLimit() {
-    if (this.cache.size <= this.maxCacheEntries) {
-      return;
-    }
-    for (const [key, entry] of this.cache.entries()) {
-      this.cache.delete(key);
-      this.removeCacheIndexEntry(entry.path, key);
-      if (this.cache.size <= this.maxCacheEntries) {
+    while (this.cache.size > this.maxCacheEntries || this.currentCacheBytes > this.maxCacheBytes) {
+      const next = this.cache.entries().next();
+      if (next.done) {
         break;
       }
+      const [key, entry] = next.value;
+      this.cache.delete(key);
+      this.removeCacheIndexEntry(entry.path, key);
+      this.currentCacheBytes = Math.max(0, this.currentCacheBytes - entry.size);
     }
   }
 
@@ -270,6 +284,7 @@ export class AtlasBridgeClient {
       if (cached) {
         this.cache.delete(descriptor.key);
         this.removeCacheIndexEntry(cached.path, descriptor.key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - cached.size);
       }
     }
 
@@ -427,7 +442,22 @@ export class AtlasBridgeClient {
 
   private storeInCache(descriptor: CacheDescriptor, value: unknown, ttlMs: number) {
     const expiresAt = Date.now() + ttlMs;
-    this.cache.set(descriptor.key, { value: cloneValue(value), expiresAt, path: descriptor.path });
+    const cloned = cloneValue(value);
+    const size = this.estimateSize(cloned);
+    const existing = this.cache.get(descriptor.key);
+    if (size > this.maxCacheBytes) {
+      if (existing) {
+        this.cache.delete(descriptor.key);
+        this.removeCacheIndexEntry(existing.path, descriptor.key);
+        this.currentCacheBytes = Math.max(0, this.currentCacheBytes - existing.size);
+      }
+      return;
+    }
+    if (existing) {
+      this.currentCacheBytes = Math.max(0, this.currentCacheBytes - existing.size);
+    }
+    this.cache.set(descriptor.key, { value: cloned, expiresAt, path: descriptor.path, size });
+    this.currentCacheBytes += size;
     let index = this.cacheIndex.get(descriptor.path);
     if (!index) {
       index = new Set<string>();
@@ -435,6 +465,32 @@ export class AtlasBridgeClient {
     }
     index.add(descriptor.key);
     this.enforceCacheLimit();
+  }
+
+  private estimateSize(value: unknown): number {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    if (typeof value === 'string') {
+      return Buffer.byteLength(value, 'utf8');
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return 8;
+    }
+    if (typeof value === 'bigint') {
+      return 16;
+    }
+    if (ArrayBuffer.isView(value)) {
+      return value.byteLength;
+    }
+    if (value instanceof ArrayBuffer) {
+      return value.byteLength;
+    }
+    try {
+      return Buffer.byteLength(JSON.stringify(value), 'utf8');
+    } catch {
+      return 0;
+    }
   }
 
   private async getToken(forceRefresh = false): Promise<string> {

@@ -3,9 +3,9 @@ import { InMemoryCache } from '../../core/cache/InMemoryCache.js';
 import { withSupabase } from '../../core/SupabaseClientFactory.js';
 
 const cacheTtlMs = config.cacheTtlSeconds * 1000;
-const summaryCache = new InMemoryCache<BridgeSummary>(cacheTtlMs, 200);
-const invoiceCache = new InMemoryCache<PaginatedResult<BridgeInvoice>>(cacheTtlMs, 400);
-const contractCache = new InMemoryCache<PaginatedResult<BridgeContract>>(cacheTtlMs, 400);
+const summaryCache = new InMemoryCache<BridgeSummary>(cacheTtlMs, 200, 4 * 1024 * 1024);
+const invoiceCache = new InMemoryCache<PaginatedResult<BridgeInvoice>>(cacheTtlMs, 300, 12 * 1024 * 1024);
+const contractCache = new InMemoryCache<PaginatedResult<BridgeContract>>(cacheTtlMs, 300, 12 * 1024 * 1024);
 
 interface BridgeSummary {
   agentId: string;
