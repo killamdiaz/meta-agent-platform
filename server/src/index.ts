@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
+import compression from 'compression';
 import { config } from './config.js';
 import { initDb } from './db.js';
 import agentsRoute from './routes/agents.js';
@@ -19,6 +20,12 @@ import automationsRoute from './routes/automations.js';
 import { toolRuntime } from './multiAgent/ToolRuntime.js';
 import agentConfigRoute from './routes/agentConfig.js';
 import automationBuilderRoute from './routes/automationBuilder.js';
+import { requestContext } from './middleware/requestContext.js';
+import { apiErrorHandler } from './middleware/apiErrorHandler.js';
+import { bridgeRouter } from './routes/bridge/index.js';
+import { atlasRouter } from './routes/atlas/index.js';
+import { systemRouter } from './routes/system/index.js';
+import { apiHealthCheck } from './core/apiHealthCheck.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,11 +34,23 @@ async function bootstrap() {
   await initDb();
   const app = express();
 
+  app.use(requestContext);
+  app.use(compression());
   app.use(cors());
-  app.use(express.json());
+  app.use(
+    express.json({
+      limit: '1mb',
+      verify: (req, _res, buf) => {
+        (req as express.Request).rawBody = buf.toString();
+      },
+    }),
+  );
+  app.use(express.urlencoded({ extended: true }));
 
-  app.get('/healthz', (_req, res) => {
-    res.json({ status: 'ok' });
+  app.get(['/health', '/healthz'], async (req, res) => {
+    const status = await apiHealthCheck();
+    const httpStatus = status.database ? 200 : 503;
+    res.status(httpStatus).json({ requestId: req.context.requestId, ...status });
   });
 
   app.use('/agents', agentsRoute);
@@ -45,6 +64,9 @@ async function bootstrap() {
   app.use('/multi-agent', multiAgentRoute);
   app.use('/automations', automationsRoute);
   app.use('/automation-builder', automationBuilderRoute);
+  app.use(bridgeRouter);
+  app.use(atlasRouter);
+  app.use(systemRouter);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
@@ -76,10 +98,7 @@ async function bootstrap() {
     });
   }
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error(err);
-    res.status(400).json({ message: err instanceof Error ? err.message : 'Unknown error' });
-  });
+  app.use(apiErrorHandler);
 
   app.listen(config.port, () => {
     console.log(`Agent framework API listening on port ${config.port}`);
