@@ -56,7 +56,7 @@ router.post('/', async (req, res, next) => {
       internet_access_enabled: payload.internet_access_enabled ?? false,
       config: payload.config
     });
-    res.status(201).json(serializeAgent(agent));
+    return res.status(201).json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -65,7 +65,7 @@ router.post('/', async (req, res, next) => {
 router.get('/', async (_req, res, next) => {
   try {
     const agents = await agentManager.allAgents();
-    res.json({ items: agents.map(serializeAgent) });
+    return res.json({ items: agents.map(serializeAgent) });
   } catch (error) {
     next(error);
   }
@@ -76,10 +76,9 @@ router.get('/:id', async (req, res, next) => {
     const { id } = req.params;
     const agent = await agentManager.getAgent(id);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
-    res.json(serializeAgent(agent));
+    return res.json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -121,10 +120,9 @@ router.patch('/:id', async (req, res, next) => {
     const payload = updateAgentSchema.parse(req.body);
     const agent = await agentManager.updateAgent(id, payload);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
-    res.json(serializeAgent(agent));
+    return res.json(serializeAgent(agent));
   } catch (error) {
     next(error);
   }
@@ -135,11 +133,10 @@ router.delete('/:id', async (req, res, next) => {
     const { id } = req.params;
     const agent = await agentManager.getAgent(id);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     await agentManager.deleteAgent(id);
-    res.status(204).send();
+    return res.status(204).send();
   } catch (error) {
     next(error);
   }
@@ -155,11 +152,10 @@ router.post('/:id/task', async (req, res, next) => {
     const { id } = req.params;
     const agent = await agentManager.getAgent(id);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     const task = await agentManager.addTask(id, body.prompt);
-    res.status(201).json(task);
+    return res.status(201).json(task);
   } catch (error) {
     next(error);
   }
@@ -170,8 +166,7 @@ router.get('/:id/memory', async (req, res, next) => {
     const { id } = req.params;
     const agent = await agentManager.getAgent(id);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     const limit = Number(req.query.limit) || 10;
     const [memoryRows, taskCounts] = await Promise.all([
@@ -197,7 +192,7 @@ router.get('/:id/memory', async (req, res, next) => {
       expires_at: memory.expires_at
     }));
 
-    res.json({
+    return res.json({
       items: memories,
       taskCounts: Object.fromEntries(taskCounts.rows.map((row) => [row.status, row.count]))
     });
@@ -216,12 +211,11 @@ router.patch('/:id/status', async (req, res, next) => {
       .parse(req.body);
     const agent = await agentManager.getAgent(id);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     await agentManager.setAgentStatus(id, body.status);
     const refreshed = await agentManager.getAgent(id);
-    res.json(serializeAgent({ ...(refreshed ?? agent), status: body.status }));
+    return res.json(serializeAgent({ ...(refreshed ?? agent), status: body.status }));
   } catch (error) {
     next(error);
   }

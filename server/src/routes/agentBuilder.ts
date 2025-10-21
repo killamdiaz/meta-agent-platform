@@ -19,7 +19,7 @@ router.post('/', async (req, res, next) => {
   try {
     const payload = buildSchema.parse(req.body);
     const result = await naturalLanguageAgentBuilder.buildAgent(payload.promptText, payload.options ?? {});
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (error) {
     next(error);
   }
@@ -30,7 +30,7 @@ router.post('/spec', async (req, res, next) => {
     const payload = buildSchema.pick({ promptText: true, options: true }).parse(req.body);
     const creator = payload.options?.creator ?? 'anonymous';
     const spec = naturalLanguageAgentBuilder.buildSpec(payload.promptText, creator);
-    res.json({ spec });
+    return res.json({ spec });
   } catch (error) {
     next(error);
   }

@@ -11,7 +11,7 @@ router.get('/approvals', async (req, res, next) => {
       ? (statusParam as 'pending' | 'approved' | 'rejected')
       : undefined;
     const approvals = await metaController.listApprovals(status);
-    res.json({ items: approvals });
+    return res.json({ items: approvals });
   } catch (error) {
     next(error);
   }
@@ -26,7 +26,7 @@ router.post('/approvals/:id/resolve', async (req, res, next) => {
       })
       .parse(req.body);
     const approval = await metaController.resolveApproval(req.params.id, body.status, body.notes);
-    res.json(approval);
+    return res.json(approval);
   } catch (error) {
     next(error);
   }
@@ -36,7 +36,7 @@ router.get('/events', async (req, res, next) => {
   try {
     const limit = req.query.limit ? Math.min(Number(req.query.limit), 500) : 200;
     const events = await metaController.listEvents(limit);
-    res.json({ items: events });
+    return res.json({ items: events });
   } catch (error) {
     next(error);
   }
@@ -46,7 +46,7 @@ router.get('/conversation-graph', async (req, res, next) => {
   try {
     const limit = req.query.limit ? Math.min(Number(req.query.limit), 500) : 100;
     const edges = await metaController.listConversationEdges(limit);
-    res.json({ items: edges });
+    return res.json({ items: edges });
   } catch (error) {
     next(error);
   }

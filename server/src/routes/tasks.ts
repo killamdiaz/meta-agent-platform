@@ -8,7 +8,7 @@ router.get('/', async (req, res, next) => {
   try {
     const status = req.query.status ? String(req.query.status) : undefined;
     const items = await agentManager.listTasks(status);
-    res.json({ items });
+    return res.json({ items });
   } catch (error) {
     next(error);
   }
@@ -47,6 +47,13 @@ router.get('/:taskId/stream', async (req, res, next) => {
     let agent = await agentManager.getAgent(task.agent_id);
     send({ type: 'status', status: task.status, task, agent });
 
+    const heartbeat = setInterval(() => {
+      if (closed) {
+        return;
+      }
+      res.write(`data: ${JSON.stringify({ taskId, type: 'ping' })}\n\n`);
+    }, 15000);
+
     const unsubscribe = agentManager.onTaskEvent(taskId, (event) => {
       if (event.type !== 'token') {
         agent = event.agent ?? agent;
@@ -70,6 +77,7 @@ router.get('/:taskId/stream', async (req, res, next) => {
       if (event.type === 'complete') {
         send({ type: 'complete', status: event.status, task: event.task, agent: event.agent ?? agent });
         unsubscribe();
+        clearInterval(heartbeat);
         safeEnd();
         return;
       }
@@ -83,12 +91,20 @@ router.get('/:taskId/stream', async (req, res, next) => {
           agent: event.agent ?? agent
         });
         unsubscribe();
+        clearInterval(heartbeat);
         safeEnd();
       }
     });
 
     req.on('close', () => {
       unsubscribe();
+      clearInterval(heartbeat);
+      safeEnd();
+    });
+
+    req.on('end', () => {
+      unsubscribe();
+      clearInterval(heartbeat);
       safeEnd();
     });
   } catch (error) {
@@ -105,7 +121,7 @@ router.post('/assign', async (req, res, next) => {
       })
       .parse(req.body);
     const task = await agentManager.addTask(body.agentId, body.prompt);
-    res.status(201).json(task);
+    return res.status(201).json(task);
   } catch (error) {
     next(error);
   }

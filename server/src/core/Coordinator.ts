@@ -4,13 +4,22 @@ import { metaController } from './MetaController.js';
 
 export class Coordinator {
   private timer?: NodeJS.Timeout;
+  private ticking = false;
 
   start() {
     this.stop();
     this.timer = setInterval(() => {
-      this.tick().catch((error) => {
-        console.error('[coordinator] tick failed', error);
-      });
+      if (this.ticking) {
+        return;
+      }
+      this.ticking = true;
+      this.tick()
+        .catch((error) => {
+          console.error('[coordinator] tick failed', error);
+        })
+        .finally(() => {
+          this.ticking = false;
+        });
     }, config.coordinatorIntervalMs);
   }
 

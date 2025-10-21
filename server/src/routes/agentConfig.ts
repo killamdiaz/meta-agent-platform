@@ -38,7 +38,7 @@ router.post('/schema', async (req, res, next) => {
       existingAgents: payload.existingAgents,
       preferredTools: payload.preferredTools,
     });
-    res.json(template);
+    return res.json(template);
   } catch (error) {
     next(error);
   }
@@ -49,11 +49,10 @@ router.get('/:agentId', async (req, res, next) => {
     const { agentId } = z.object({ agentId: z.string().uuid('Invalid agent id.') }).parse(req.params);
     const agent = await agentManager.getAgent(agentId);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     const config = await agentConfigService.getAgentConfig(agentId);
-    res.json(
+    return res.json(
       config ?? {
         agentId,
         agentType: agent.agent_type ?? agent.role,
@@ -74,8 +73,7 @@ router.put('/:agentId', async (req, res, next) => {
     const payload = upsertConfigSchema.parse(req.body);
     const agent = await agentManager.getAgent(agentId);
     if (!agent) {
-      res.status(404).json({ message: 'Agent not found' });
-      return;
+      return res.status(404).json({ message: 'Agent not found' });
     }
     const record = await agentConfigService.upsertAgentConfig(agentId, {
       agentType: payload.agentType,
@@ -83,7 +81,7 @@ router.put('/:agentId', async (req, res, next) => {
       schema: payload.schema,
       values: payload.values,
     });
-    res.json(record);
+    return res.json(record);
   } catch (error) {
     next(error);
   }
