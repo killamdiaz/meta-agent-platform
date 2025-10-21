@@ -57,7 +57,7 @@ router.get('/overview', async (_req, res, next) => {
       count: row.count ?? 0
     }));
 
-    res.json({
+    return res.json({
       agentCount: Number(agentCountResult.rows[0]?.count ?? 0),
       taskCounts: {
         total: Object.values(taskCounts).reduce((sum, value) => sum + value, 0),
