@@ -15,9 +15,7 @@ export function requestContext(req: Request, res: Response, next: NextFunction) 
     if (!ended) {
       ended = true;
       const latency = Date.now() - startedAt;
-      if (!res.headersSent) {
-        res.setHeader('X-Response-Time', `${latency}ms`);
-      }
+      res.setHeader('X-Response-Time', `${latency}ms`);
       const agentId = req.agentId ?? (req.user?.agentId as string | undefined) ?? null;
       console.log({
         level: 'info',

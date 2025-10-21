@@ -2,26 +2,34 @@ import type { Request, Response, NextFunction } from 'express';
 
 interface HttpError extends Error {
   status?: number;
+  details?: unknown;
 }
 
-export function apiErrorHandler(err: HttpError, req: Request, res: Response, next: NextFunction) {
-  if (res.headersSent) {
-    return next(err);
-  }
-
+export function apiErrorHandler(err: HttpError, req: Request, res: Response, _next: NextFunction) {
   const status = typeof err.status === 'number' ? err.status : 500;
   const requestId = req.context?.requestId ?? 'unknown';
+  const agentId = req.agentId ?? (req.user?.agentId as string | undefined) ?? null;
+  const message = status >= 500 ? 'Internal Server Error' : err.message;
 
-  console.error('API Error:', {
+  console.error({
+    level: 'error',
+    event: 'api.error',
     requestId,
     status,
-    message: err.message,
-    stack: err.stack,
+    agentId,
+    endpoint: req.originalUrl,
+    method: req.method,
+    latencyMs: Date.now() - (req.context?.startedAt ?? Date.now()),
+    error: {
+      message: err.message,
+      stack: err.stack,
+      details: err.details ?? null,
+    },
   });
 
-  return res.status(status).json({
-    success: false,
-    message: err.message ?? 'Internal Server Error',
+  res.status(status).json({
+    error: message,
     requestId,
+    details: err.message,
   });
 }

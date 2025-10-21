@@ -13,5 +13,5 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 COPY --from=base /app/package.json ./
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/dist ./dist
-CMD ["node", "dist/index.js"]
+CMD ["node", "--max-old-space-size=2048", "dist/index.js"]
 

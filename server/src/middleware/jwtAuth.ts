@@ -38,6 +38,6 @@ export function requireJwt(req: Request, res: Response, next: NextFunction) {
       requestId,
       error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
     });
-    return res.status(401).json({ error: 'Unauthorized', requestId, details: 'Invalid token' });
+    res.status(401).json({ error: 'Unauthorized', requestId, details: 'Invalid token' });
   }
 }
