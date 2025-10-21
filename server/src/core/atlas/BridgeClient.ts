@@ -11,6 +11,7 @@ export interface AtlasBridgeClientOptions {
   defaultCacheTtlMs?: number;
   maxRetries?: number;
   retryDelayMs?: number;
+  requestTimeoutMs?: number;
 }
 
 export interface AtlasBridgeRequestOptions {
@@ -25,6 +26,7 @@ export interface AtlasBridgeRequestOptions {
   skipCache?: boolean;
   tag?: string;
   logMessage?: string;
+  requestId?: string;
 }
 
 interface CacheEntry<T> {
@@ -34,12 +36,24 @@ interface CacheEntry<T> {
 
 const DEFAULT_BASE_URL = 'https://lighdepncfhiecqllmod.supabase.co/functions/v1';
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 400;
+const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 const globalStructuredClone = (globalThis as { structuredClone?: <T>(input: T) => T }).structuredClone;
+
+const serialiseError = (error: unknown) => {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  return error;
+};
 
 const cloneValue = <T>(value: T): T => {
   if (value === undefined || value === null) {
@@ -88,6 +102,7 @@ export class AtlasBridgeClient {
   private readonly defaultCacheTtlMs: number;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: AtlasBridgeClientOptions) {
     if (!options.agentId) {
@@ -102,12 +117,70 @@ export class AtlasBridgeClient {
     this.defaultCacheTtlMs = Math.max(0, options.defaultCacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
     this.maxRetries = Math.max(1, options.maxRetries ?? DEFAULT_MAX_RETRIES);
     this.retryDelayMs = Math.max(50, options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+    this.requestTimeoutMs = Math.max(100, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     this.agentId = options.agentId;
     this.secret = options.secret;
   }
 
   private agentId: string;
   private secret: string;
+
+  private logAttempt(details: {
+    attempt: number;
+    status?: number;
+    error?: unknown;
+    endpoint: string;
+    requestId?: string;
+    latencyMs: number;
+  }) {
+    const { attempt, status, error, endpoint, requestId, latencyMs } = details;
+    const base = {
+      component: 'atlas-bridge-client',
+      agentId: this.agentId,
+      endpoint,
+      attempt,
+      latencyMs,
+      requestId: requestId ?? null,
+    };
+    if (error) {
+      console.error({ ...base, level: 'error', status: status ?? null, error: serialiseError(error) });
+    } else {
+      console.log({ ...base, level: 'info', status: status ?? null });
+    }
+  }
+
+  private createTimeoutSignal(signal?: AbortSignal) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error('AtlasBridgeClient request timed out'));
+      }
+    }, this.requestTimeoutMs);
+
+    const abortListener = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(signal?.reason ?? new Error('Upstream request aborted'));
+      }
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        abortListener();
+      } else {
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+    }
+
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', abortListener);
+        }
+      },
+    };
+  }
 
   setToken(token: string | null | undefined) {
     const trimmed = typeof token === 'string' ? token.trim() : '';
@@ -168,6 +241,8 @@ export class AtlasBridgeClient {
     const headers = this.buildHeaders(options.headers);
     const body = this.serialiseBody(method, options.body, headers);
 
+    const endpoint = options.tag ?? options.path;
+
     for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
       let token: string;
       try {
@@ -184,13 +259,20 @@ export class AtlasBridgeClient {
       headers['X-Agent-Id'] = this.agentId;
       headers['X-Agent-Signature'] = generateSignature(this.agentId, token, this.secret);
 
+      const attemptStarted = Date.now();
       try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body,
-          signal: options.signal,
-        });
+        const timeout = this.createTimeoutSignal(options.signal);
+        let response: globalThis.Response;
+        try {
+          response = await fetch(url, {
+            method,
+            headers,
+            body,
+            signal: timeout.signal,
+          });
+        } finally {
+          timeout.cleanup();
+        }
 
         const raw = await response.text();
         let payload: unknown = undefined;
@@ -211,6 +293,13 @@ export class AtlasBridgeClient {
           } else if (method !== 'GET') {
             this.clearCache(options.path);
           }
+          this.logAttempt({
+            attempt,
+            status: response.status,
+            endpoint,
+            requestId: options.requestId,
+            latencyMs: Date.now() - attemptStarted,
+          });
           return result;
         }
 
@@ -231,18 +320,43 @@ export class AtlasBridgeClient {
           continue;
         }
 
+        const latency = Date.now() - attemptStarted;
+
         const errorMessage =
           typeof payload === 'object' && payload && 'error' in payload
             ? String((payload as Record<string, unknown>).error ?? 'Atlas Bridge request failed.')
             : `Atlas Bridge request failed with status ${response.status}`;
-        throw new AtlasBridgeError(errorMessage, response.status, payload);
+        const error = new AtlasBridgeError(errorMessage, response.status, payload);
+        this.logAttempt({
+          attempt,
+          status: response.status,
+          endpoint,
+          requestId: options.requestId,
+          latencyMs: latency,
+          error,
+        });
+        throw error;
       } catch (error) {
         if (error instanceof AtlasBridgeError) {
           throw error;
         }
         if (attempt >= this.maxRetries) {
+          this.logAttempt({
+            attempt,
+            endpoint,
+            requestId: options.requestId,
+            latencyMs: Date.now() - attemptStarted,
+            error,
+          });
           throw error;
         }
+        this.logAttempt({
+          attempt,
+          endpoint,
+          requestId: options.requestId,
+          latencyMs: Date.now() - attemptStarted,
+          error,
+        });
         await this.backoff(attempt);
       }
     }
