@@ -1,0 +1,11 @@
+{
+  "name": "clickup",
+  "version": "1.0.0",
+  "category": "productivity",
+  "description": "Manage ClickUp tasks, lists, and workspaces.",
+  "required_auth": {
+    "type": "api_key"
+  },
+  "example_actions": ["list_tasks", "create_task", "update_status"],
+  "homepage": "https://clickup.com/api"
+}

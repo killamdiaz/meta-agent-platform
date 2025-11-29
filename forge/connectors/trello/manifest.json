@@ -1,0 +1,11 @@
+{
+  "name": "trello",
+  "version": "1.0.0",
+  "category": "productivity",
+  "description": "Manage Trello boards, lists, and cards.",
+  "required_auth": {
+    "type": "custom"
+  },
+  "example_actions": ["list_boards", "create_card", "list_cards"],
+  "homepage": "https://developer.atlassian.com/cloud/trello"
+}

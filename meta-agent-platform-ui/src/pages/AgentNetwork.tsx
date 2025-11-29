@@ -2444,9 +2444,46 @@ export default function AgentNetwork() {
       if (!text || isPromptSubmitting) {
         return;
       }
+
       setPromptSubmitting(true);
-      setPromptStatus(null);
+      setPromptStatus("Routing prompt...");
+      let shouldFallbackToBuilder = false;
       try {
+        try {
+          const dispatchResult = await api.dispatchToolAgentPrompt(text, { limit: 25 });
+          setPromptStatus(
+            `Dispatched to ${dispatchResult.agent.name}. Check the Tool Agent Console for runtime output.`,
+          );
+          setPromptInput("");
+          toast({
+            title: `Sent to ${dispatchResult.agent.name}`,
+            description: "Open the Tool Agent Console to monitor the agent logs.",
+          });
+          return;
+        } catch (dispatchError) {
+          const status = (dispatchError as { status?: number }).status;
+          if (status === 422) {
+            shouldFallbackToBuilder = true;
+            setPromptStatus("Interpreting prompt...");
+          } else {
+            const message =
+              dispatchError instanceof Error
+                ? dispatchError.message
+                : "Failed to dispatch prompt to a tool agent.";
+            setPromptStatus(`⚠️ ${message}`);
+            toast({
+              title: "Prompt dispatch failed",
+              description: message,
+              variant: "destructive",
+            });
+            return;
+          }
+        }
+
+        if (!shouldFallbackToBuilder) {
+          return;
+        }
+
         const context: { pipeline?: AutomationPipeline; name?: string; description?: string } = {
           name: automationName,
           description: automationDescription,
@@ -2462,7 +2499,6 @@ export default function AgentNetwork() {
         const interpretationMessage = response.message?.trim() ?? summary ?? "Automation updated.";
         setPromptStatus(interpretationMessage);
         setPromptInput("");
-        // Respect the user's current automation drawer state instead of forcing it open.
         const normalizedTitle = interpretationMessage.startsWith("✅")
           ? interpretationMessage
           : `✅ ${interpretationMessage}`;
@@ -2478,12 +2514,12 @@ export default function AgentNetwork() {
         });
       } catch (error) {
         console.error("[automation-builder] prompt submission failed", error);
-        const description = error instanceof Error ? error.message : "Unknown error occurred.";
+        const message = error instanceof Error ? error.message : "Unknown error occurred.";
         const failureMessage = "Could not understand prompt.";
         setPromptStatus(failureMessage);
         toast({
-          title: "❌ Could not understand prompt.",
-          description,
+          title: "❌ Could not process prompt",
+          description: message,
           variant: "destructive",
         });
       } finally {
@@ -2497,7 +2533,6 @@ export default function AgentNetwork() {
       automationPipeline,
       isPromptSubmitting,
       promptInput,
-      setAutomationOpen,
       toast,
     ],
   );

@@ -50,20 +50,21 @@ router.get('/graph', async (_req, res, next) => {
         metadata: Record<string, unknown>;
         created_at: string;
       }>(
-        `SELECT id,
-                agent_id,
-                content,
-                metadata,
-                created_at
-           FROM agent_memory
-          WHERE memory_type = 'long_term'
-            AND COALESCE(metadata->>'category', '') <> 'conversation'
-            AND content NOT ILIKE 'received % message %'
-            AND content NOT ILIKE 'sent % message %'
-            AND content NOT ILIKE 'reply to %'
-            AND content NOT ILIKE 'sent to slack%'
-            AND content NOT ILIKE 'slack user%'
-          ORDER BY created_at DESC
+        `SELECT m.id,
+                COALESCE(a.settings->>'alias', a.name, m.agent_id::text) AS agent_id,
+                m.content,
+                m.metadata,
+                m.created_at
+           FROM agent_memory m
+           LEFT JOIN agents a ON a.id = m.agent_id
+          WHERE m.memory_type = 'long_term'
+            AND COALESCE(m.metadata->>'category', '') <> 'conversation'
+            AND m.content NOT ILIKE 'received % message %'
+            AND m.content NOT ILIKE 'sent % message %'
+            AND m.content NOT ILIKE 'reply to %'
+            AND m.content NOT ILIKE 'sent to slack%'
+            AND m.content NOT ILIKE 'slack user%'
+          ORDER BY m.created_at DESC
           LIMIT 300`
       ),
       pool.query<{

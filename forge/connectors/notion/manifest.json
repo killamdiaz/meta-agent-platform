@@ -1,0 +1,11 @@
+{
+  "name": "notion",
+  "version": "1.0.0",
+  "category": "productivity",
+  "description": "Access and manage Notion pages, databases, and content.",
+  "required_auth": {
+    "type": "api_key"
+  },
+  "example_actions": ["list_pages", "retrieve_page", "create_page"],
+  "homepage": "https://developers.notion.com"
+}

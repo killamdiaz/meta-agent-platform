@@ -15,6 +15,87 @@ const streamSchema = z.object({
   prompt: z.string().min(10, 'Prompt should be at least 10 characters long'),
 });
 
+const toolAgentCommandSchema = z.object({
+  prompt: z.string().min(3, 'Prompt is required'),
+  agentId: z.string().min(2, 'agentId must be at least 2 characters').optional(),
+  limit: z
+    .number()
+    .int('limit must be an integer')
+    .min(1, 'limit must be at least 1')
+    .max(100, 'limit must be <= 100')
+    .optional(),
+  mode: z.enum(['auto', 'context', 'task']).optional(),
+});
+
+type ToolAgentDescriptor = ReturnType<typeof toolRuntime.describeAgents>[number];
+
+const TOOL_AGENT_HINTS: Array<{
+  pattern: RegExp;
+  keywords: RegExp[];
+}> = [
+  {
+    pattern: /\b(task|tasks|todo|follow[-\s]?up|backlog)\b/i,
+    keywords: [/task/],
+  },
+  {
+    pattern: /\b(invoice|billing|payment|receivable|payable)\b/i,
+    keywords: [/invoice|finance/],
+  },
+  {
+    pattern: /\b(contract|agreement|deal|signature)\b/i,
+    keywords: [/contract/],
+  },
+  {
+    pattern: /\b(notify|notification|alert|broadcast)\b/i,
+    keywords: [/notify|alert/],
+  },
+  {
+    pattern: /\b(workspace|overview|summary|plan)\b/i,
+    keywords: [/workspace|overview/],
+  },
+  {
+    pattern: /\b(calendar|meeting|schedule|livekit|call)\b/i,
+    keywords: [/calendar|meeting/],
+  },
+  {
+    pattern: /\b(summary|summaries|summarize|digest|recap)\b/i,
+    keywords: [/summary|summarizer|digest/],
+  },
+];
+
+const normalise = (value: string) => value.toLowerCase();
+
+const matchesKeyword = (agent: ToolAgentDescriptor, regex: RegExp): boolean => {
+  const name = normalise(agent.name);
+  const role = normalise(agent.role ?? '');
+  const type = normalise(agent.agentType ?? '');
+  return regex.test(name) || regex.test(role) || regex.test(type);
+};
+
+const findAgentByPrompt = (prompt: string, agents: ToolAgentDescriptor[]): ToolAgentDescriptor | null => {
+  const lowered = prompt.toLowerCase();
+
+  for (const rule of TOOL_AGENT_HINTS) {
+    if (!rule.pattern.test(lowered)) continue;
+    const candidate = agents.find((agent) => rule.keywords.some((keyword) => matchesKeyword(agent, keyword)));
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  const explicitByName = agents.find((agent) => lowered.includes(agent.name.toLowerCase()));
+  if (explicitByName) {
+    return explicitByName;
+  }
+
+  const explicitByType = agents.find((agent) => lowered.includes((agent.agentType ?? '').toLowerCase()));
+  if (explicitByType) {
+    return explicitByType;
+  }
+
+  return null;
+};
+
 router.post('/sessions', async (req, res, next) => {
   try {
     const { prompt } = sessionSchema.parse(req.body);
@@ -75,6 +156,96 @@ router.get('/sessions/stream', async (req, res) => {
     if (!res.writableEnded) {
       res.end();
     }
+  }
+});
+
+router.post('/tool-agents/run', async (req, res, next) => {
+  try {
+    const payload = toolAgentCommandSchema.parse(req.body);
+    const agents = toolRuntime.describeAgents();
+    if (!agents || agents.length === 0) {
+      res.status(503).json({ message: 'No tool agents are currently registered.' });
+      return;
+    }
+
+    let target: ToolAgentDescriptor | undefined;
+    if (payload.agentId) {
+      const lookup = payload.agentId.toLowerCase();
+      target = agents.find(
+        (agent) =>
+          agent.id.toLowerCase() === lookup ||
+          (agent.agentType ?? '').toLowerCase() === lookup ||
+          agent.name.toLowerCase() === lookup,
+      );
+      if (!target) {
+        res.status(404).json({ message: `Tool agent ${payload.agentId} not found.` });
+        return;
+      }
+    } else {
+      target = findAgentByPrompt(payload.prompt, agents) ?? undefined;
+      if (!target) {
+        res.status(422).json({ message: 'No matching tool agent for prompt.' });
+        return;
+      }
+    }
+
+    const mode =
+      payload.mode && payload.mode !== 'auto'
+        ? payload.mode
+        : /\b(fetch|list|get|show|display|pull|retrieve|give me|gimme)\b/i.test(payload.prompt)
+          ? 'context'
+          : 'task';
+
+    const topMatch = payload.prompt.match(/\btop\s+(\d{1,2})\b/i);
+    const inferredLimit =
+      payload.limit ??
+      (/\ball\b/i.test(payload.prompt)
+        ? 50
+        : topMatch
+          ? Number.parseInt(topMatch[1], 10)
+          : undefined);
+    const limit = Math.min(Math.max(inferredLimit ?? 10, 1), 100);
+
+    const metadata: Record<string, unknown> = {
+      intent: mode === 'context' ? 'request_context' : 'task',
+      eventType: mode === 'context' ? 'request_context' : 'task',
+      requestedBy: 'agent-network',
+      mode,
+      originalPrompt: payload.prompt,
+      payload: {
+        prompt: payload.prompt,
+        mode,
+        limit: mode === 'context' ? limit : undefined,
+      },
+    };
+
+    if (mode === 'context') {
+      metadata.limit = limit;
+    }
+
+    const message = agentBroker.publish({
+      from: 'agent-network-prompt',
+      to: target.id,
+      type: 'task',
+      content: payload.prompt,
+      metadata,
+    });
+
+    res.json({
+      status: 'dispatched',
+      agent: {
+        id: target.id,
+        name: target.name,
+        role: target.role,
+        agentType: target.agentType,
+      },
+      messageId: message.id,
+      dispatchedAt: message.timestamp,
+      mode,
+      limit: mode === 'context' ? limit : undefined,
+    });
+  } catch (error) {
+    next(error);
   }
 });
 

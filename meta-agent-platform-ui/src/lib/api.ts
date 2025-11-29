@@ -46,6 +46,8 @@ const API_BASE = (() => {
   return configured ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 })();
 
+type ApiError = Error & { status?: number };
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...rest } = options;
   const response = await fetch(`${API_BASE}${path}`, {
@@ -58,7 +60,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || response.statusText);
+    const error: ApiError = new Error(text || response.statusText);
+    error.status = response.status;
+    throw error;
   }
 
   if (response.status === 204) {
@@ -206,6 +210,25 @@ export const api = {
 
   fetchMultiAgentMemory(): Promise<MultiAgentSession['memory']> {
     return request('/multi-agent/memory');
+  },
+
+  dispatchToolAgentPrompt(prompt: string, options?: { agentId?: string; limit?: number; mode?: 'auto' | 'context' | 'task' }) {
+    return request<{
+      status: string;
+      agent: { id: string; name: string; role: string; agentType: string };
+      messageId: string;
+      dispatchedAt: string;
+      mode: 'context' | 'task';
+      limit?: number;
+    }>('/multi-agent/tool-agents/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        agentId: options?.agentId,
+        limit: options?.limit,
+        mode: options?.mode ?? 'auto',
+      }),
+    });
   },
 
   listAutomations(): Promise<{ items: AutomationRecord[] }> {

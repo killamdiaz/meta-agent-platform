@@ -1,0 +1,12 @@
+{
+  "name": "slack",
+  "version": "1.0.0",
+  "category": "communication",
+  "description": "Send messages, manage channels, and retrieve workspace data from Slack.",
+  "required_auth": {
+    "type": "oauth2",
+    "scopes": ["chat:write", "channels:read", "channels:history"]
+  },
+  "example_actions": ["send_message", "list_channels", "fetch_conversation_history"],
+  "homepage": "https://api.slack.com"
+}

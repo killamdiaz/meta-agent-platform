@@ -1,0 +1,12 @@
+{
+  "name": "github",
+  "version": "1.0.0",
+  "category": "devops",
+  "description": "Interact with GitHub repositories, issues, and workflows.",
+  "required_auth": {
+    "type": "oauth2",
+    "scopes": ["repo", "workflow"]
+  },
+  "example_actions": ["list_repositories", "create_issue", "dispatch_workflow"],
+  "homepage": "https://docs.github.com/en/rest"
+}

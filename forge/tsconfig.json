@@ -20,6 +20,15 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["next-env.d.ts", "src/**/*", "pages/**/*", "app/**/*", "components/**/*"],
+  "include": [
+    "next-env.d.ts",
+    "src/**/*",
+    "pages/**/*",
+    "app/**/*",
+    "components/**/*",
+    "connectors/**/*",
+    "utils/**/*",
+    "runtime/**/*"
+  ],
   "exclude": ["node_modules"]
 }

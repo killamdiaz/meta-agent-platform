@@ -1,0 +1,15 @@
+{
+  "name": "gmail",
+  "version": "1.0.0",
+  "category": "communication",
+  "description": "Send and manage Gmail messages and threads.",
+  "required_auth": {
+    "type": "oauth2",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+  },
+  "example_actions": ["send_email", "list_messages", "get_thread"],
+  "homepage": "https://developers.google.com/gmail/api"
+}

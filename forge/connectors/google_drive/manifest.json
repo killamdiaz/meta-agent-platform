@@ -1,0 +1,15 @@
+{
+  "name": "google_drive",
+  "version": "1.0.0",
+  "category": "knowledge",
+  "description": "Browse, search, and download files from Google Drive.",
+  "required_auth": {
+    "type": "oauth2",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      "https://www.googleapis.com/auth/drive.readonly"
+    ]
+  },
+  "example_actions": ["list_files", "download_file", "search_files"],
+  "homepage": "https://developers.google.com/drive"
+}

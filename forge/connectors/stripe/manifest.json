@@ -1,0 +1,11 @@
+{
+  "name": "stripe",
+  "version": "1.0.0",
+  "category": "finance",
+  "description": "Manage payments, customers, and invoices via Stripe.",
+  "required_auth": {
+    "type": "api_key"
+  },
+  "example_actions": ["list_customers", "create_payment_intent", "list_charges"],
+  "homepage": "https://stripe.com/docs/api"
+}
