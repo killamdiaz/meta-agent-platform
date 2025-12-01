@@ -11,13 +11,11 @@ import { NaturalLanguageAutomationParser } from './NaturalLanguageAutomationPars
 import { AutomationEventBus } from './AutomationEventBus.js';
 
 const KEY_PROMPTS: Record<AutomationAgentName, string> = {
-  SlackTrigger:
-    'This step requires your Slack API token. Please enter it below (it will NOT be stored).',
+  SlackTrigger: 'Slack connection uses configured integration; no token required.',
+  SlackAgent: 'Slack connection uses configured integration; no token required.',
   GmailTrigger: 'This step needs your Gmail credentials. Provide the token to continue.',
   CronTrigger: 'No credentials required for scheduled runs.',
   SummarizerAgent: 'No credentials required.',
-  SlackAgent:
-    'Provide the Slack bot token or webhook used for outbound messages. It will not be stored.',
   NotionAgent: 'This step requires your Notion integration token. Enter it securely below.',
   DiscordAgent:
     'This step needs your Discord bot token. Provide it below (it will NOT be stored).',
@@ -35,8 +33,6 @@ const KEY_PROMPTS: Record<AutomationAgentName, string> = {
 };
 
 const AGENTS_REQUIRING_KEYS = new Set<AutomationAgentName>([
-  'SlackTrigger',
-  'SlackAgent',
   'NotionAgent',
   'DiscordAgent',
   'EmailSenderAgent',

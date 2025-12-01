@@ -10,8 +10,6 @@ import {
 import { autoConnectSlackWorkflow } from '../connectors/slack/workflows/workflowAutoConnect.js';
 
 const KEY_REQUIRED_AGENTS = new Set<AutomationAgentName>([
-  'SlackTrigger',
-  'SlackAgent',
   'JiraAgent',
   'JiraTrigger',
   'NotionAgent',

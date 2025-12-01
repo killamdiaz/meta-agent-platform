@@ -77,6 +77,11 @@ export async function storeEmbeddings(records: IngestionRecord[]) {
   try {
     await client.query('BEGIN');
     for (const record of records) {
+      const orgId = (record as any).orgId || (record as any).org_id;
+      const accountId = (record as any).accountId ?? (record as any).account_id ?? null;
+      if (!orgId) {
+        throw new Error('orgId is required to store embeddings');
+      }
       const chunks = chunkText(record.content);
       for (const chunk of chunks) {
         const embedding = await embedContent(chunk);
@@ -87,8 +92,8 @@ export async function storeEmbeddings(records: IngestionRecord[]) {
           `INSERT INTO forge_embeddings (org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
-            record.orgId,
-            record.accountId ?? null,
+            orgId,
+            accountId,
             record.sourceType,
             record.sourceId ?? null,
             chunk,

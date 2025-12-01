@@ -23,6 +23,12 @@ export const config = {
   slackAppId: process.env.SLACK_APP_ID || '',
   slackRedirectUrl: process.env.SLACK_REDIRECT_URL || '',
   slackScopes: process.env.SLACK_SCOPES || 'app_mentions:read,channels:history,chat:write,files:read,commands,users:read,im:history',
+  jiraClientId: process.env.JIRA_CLIENT_ID || '',
+  jiraClientSecret: process.env.JIRA_CLIENT_SECRET || '',
+  jiraRedirectUrl: process.env.JIRA_REDIRECT_URL || '',
+  jiraScopes:
+    process.env.JIRA_SCOPES ||
+    'read:jira-work read:jira-user read:jira-project write:jira-work manage:jira-webhook offline_access',
   defaultOrgId: process.env.DEFAULT_ORG_ID || '',
   defaultAccountId: process.env.DEFAULT_ACCOUNT_ID || '',
   modelRouterUrl: process.env.MODEL_ROUTER_URL || '',

@@ -29,14 +29,12 @@ export function autoConnectSlackWorkflow(
 
   if (lower.includes('slack')) {
     const trigger = ensureNode('SlackTrigger', 'Trigger', { event: 'channel_message', channel: 'auto' });
-    requiresKeys.add('SlackTrigger');
     if (!nodes.find((node) => node.agent === 'SlackAgent')) {
       const action = ensureNode('SlackAgent', 'Action', {
         channel: '#updates',
         message: '{{summary.body}}',
         connector: 'slack',
       });
-      requiresKeys.add('SlackAgent');
       if (trigger) {
         edges.push({ from: trigger.id, to: action.id });
       }

@@ -35,7 +35,7 @@ function mapMemoryStatus(memory: { created_at: string }): 'active' | 'new' | 'ol
 
 router.get('/graph', async (_req, res, next) => {
   try {
-    const [agentsResult, memoriesResult, tasksResult] = await Promise.all([
+    const [agentsResult, memoriesResult, tasksResult, integrationResult] = await Promise.all([
       pool.query<{
         id: string;
         name: string;
@@ -78,6 +78,19 @@ router.get('/graph', async (_req, res, next) => {
            FROM tasks
           ORDER BY created_at DESC
           LIMIT 50`
+      ),
+      pool.query<{
+        id: string;
+        source_id: string | null;
+        metadata: Record<string, unknown> | null;
+        content: string;
+        created_at: string;
+      }>(
+        `SELECT id, source_id, metadata, content, created_at
+           FROM forge_embeddings
+          WHERE source_type = 'integration'
+          ORDER BY created_at DESC
+          LIMIT 50`
       )
     ]);
 
@@ -91,6 +104,22 @@ router.get('/graph', async (_req, res, next) => {
         updatedAt: agent.updated_at
       }
     }));
+
+    const integrationNodes = integrationResult.rows.map((row) => {
+      const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+      return {
+        id: row.id,
+        type: 'integration',
+        label: (meta.label as string) || row.content || row.id,
+        status: 'active' as const,
+        metadata: {
+          createdAt: row.created_at,
+          sourceId: row.source_id,
+          color: (meta.color as string) || '#f97316',
+          ...meta
+        }
+      };
+    });
 
     const memoryNodes = memoriesResult.rows.map((memory) => ({
       id: memory.id,
@@ -168,9 +197,19 @@ router.get('/graph', async (_req, res, next) => {
       strength: task.status === 'completed' ? 0.75 : 0.5
     }));
 
+    // Link integrations to all agents to anchor them centrally
+    const integrationLinks = integrationNodes.flatMap((integration) =>
+      agentNodes.map((agent) => ({
+        source: integration.id,
+        target: agent.id,
+        relation: 'shared' as const,
+        strength: 0.9
+      }))
+    );
+
     res.json({
-      nodes: [...agentNodes, ...memoryNodes, ...taskNodes],
-      links: [...agentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
+      nodes: [...agentNodes, ...integrationNodes, ...memoryNodes, ...taskNodes],
+      links: [...agentLinks, ...integrationLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
     });
   } catch (error) {
     next(error);

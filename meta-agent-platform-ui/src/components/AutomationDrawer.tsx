@@ -40,7 +40,24 @@ export function AutomationDrawer({ open, onClose, pipeline, sessionId, status }:
       .sort((a, b) => a.id.localeCompare(b.id));
     const total = automationAgents.length;
     if (total === 0) {
-      return [];
+      // Show a single phantom node representing the "+ New Agent" anchor
+      return [
+        {
+          id: `${prefix}new-agent-anchor`,
+          data: { label: "+ New Agent", role: "create" },
+          position: { x: 0, y: 0 },
+          draggable: false,
+          style: {
+            borderRadius: 12,
+            padding: "14px 18px",
+            border: `1px dashed rgba(59,130,246,0.6)`,
+            background: "rgba(37,99,235,0.08)",
+            color: "rgb(59,130,246)",
+            fontSize: 14,
+            boxShadow: "0 0 18px rgba(59,130,246,0.35)",
+          },
+        },
+      ];
     }
 
     return automationAgents.map((agent, index) => ({
@@ -138,27 +155,30 @@ export function AutomationDrawer({ open, onClose, pipeline, sessionId, status }:
             </div>
           </div>
           <div className="flex-1 relative">
-            {flowNodes.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground/80">
-                Waiting for automation activity…
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              fitView
+              panOnScroll
+              panOnDrag
+              zoomOnScroll
+              nodesDraggable={false}
+              nodesConnectable={false}
+              elementsSelectable={false}
+              proOptions={{ hideAttribution: true }}
+            >
+              <MiniMap pannable zoomable />
+              <Controls />
+              <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="rgba(148, 163, 184, 0.3)" />
+            </ReactFlow>
+            {flowNodes.length === 1 && flowNodes[0].data?.role === "create" && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="rounded-full border-2 border-blue-500/70 bg-blue-500/5 px-6 py-3 shadow-[0_0_30px_rgba(59,130,246,0.6)] animate-pulse">
+                  <span className="text-sm font-semibold text-blue-300">
+                    Start by adding an agent or typing a prompt below
+                  </span>
+                </div>
               </div>
-            ) : (
-              <ReactFlow
-                nodes={flowNodes}
-                edges={flowEdges}
-                fitView
-                panOnScroll
-                panOnDrag
-                zoomOnScroll
-                nodesDraggable={false}
-                nodesConnectable={false}
-                elementsSelectable={false}
-                proOptions={{ hideAttribution: true }}
-              >
-                <MiniMap pannable zoomable />
-                <Controls />
-                <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="rgba(148, 163, 184, 0.3)" />
-              </ReactFlow>
             )}
           </div>
         </div>

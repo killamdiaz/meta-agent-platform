@@ -6,12 +6,15 @@ import ReactFlow, {
   MiniMap,
   BackgroundVariant,
   Node,
+  Handle,
+  Position,
   type ReactFlowInstance,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Plus, Workflow, ChevronDown, Send, Loader2, Pointer, Hand } from "lucide-react";
+import { nanoid } from "nanoid";
 import { useAgentStore } from "@/store/agentStore";
 import { StartNode } from "@/components/AgentNetwork/StartNode";
 import { AgentNode } from "@/components/AgentNetwork/AgentNode";
@@ -81,17 +84,17 @@ const generateId = () => {
 };
 
 const isMetaControllerAgent = (agent: AgentRecord): boolean => {
-  const id = agent.id.toLowerCase();
+  const id = agent.id?.toLowerCase?.() ?? "";
   const name = agent.name?.toLowerCase?.() ?? "";
   const role = agent.role?.toLowerCase?.() ?? "";
+  const isMetaFlag = (agent as { is_meta?: boolean }).is_meta === true;
   return (
-    (id.includes("meta") && id.includes("controller")) ||
-    name.includes("meta controller") ||
-    role.includes("meta controller") ||
-    role.includes("meta-controller") ||
-    role === "meta"
+    id === "meta-controller" ||
+    isMetaFlag ||
+    name.includes("meta") ||
+    role.includes("meta")
   );
-};
+}; // FIX APPLIED: Harden meta-controller detection
 
 const getSupabaseClient = (): SupabaseClientLike | null => {
   if (typeof window === "undefined") return null;
@@ -497,9 +500,20 @@ const serializeBlueprint = (
   };
 };
 
+const ConditionNode = ({ data }: { data: { label?: string; condition?: string; description?: string } }) => (
+  <div className="rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white shadow-sm">
+    <Handle type="target" position={Position.Top} className="w-2 h-2 bg-white/70" />
+    <div className="text-xs font-semibold uppercase tracking-wide text-white/70">Condition</div>
+    <div className="text-sm font-medium text-white">{data.label ?? "Condition"}</div>
+    {data.condition ? <div className="mt-1 text-xs text-white/70">{data.condition}</div> : null}
+    {data.description ? <div className="mt-1 text-[11px] text-white/60">{data.description}</div> : null}
+    <Handle type="source" position={Position.Bottom} className="w-2 h-2 bg-white/70" />
+  </div>
+);
+
 const nodeTypes = {
-  start: StartNode,
   agent: AgentNode,
+  condition: ConditionNode,
 };
 
 type ModuleProfile = {
@@ -669,13 +683,7 @@ const deriveFallbackProfile = (agentType: string | undefined, fallbackName: stri
   };
 };
 
-const START_NODE: Node = {
-  id: "start",
-  type: "start",
-  position: { x: 0, y: 0 },
-  data: { label: "Start" },
-  draggable: false,
-};
+const START_NODE: Node | null = null;
 
 const normalizePositionKey = (id: string) => (id.startsWith("pipeline:") ? id.slice("pipeline:".length) : id);
 
@@ -721,6 +729,7 @@ export default function AgentNetwork() {
   const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
   const automationPipeline = useAutomationPipelineStore((state) => state.pipeline);
   const [automationDirty, setAutomationDirty] = useState(false);
+  const lastPromptRef = useRef<string>("");
   const lastPersistedSignatureRef = useRef<string | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
   const autoSaveInFlightRef = useRef(false);
@@ -905,15 +914,23 @@ export default function AgentNetwork() {
         return "No changes detected.";
       }
 
-      const existingPipeline =
-        automationPipeline ??
-        ({
-          name: automationName.trim() || "Untitled Automation",
-          nodes: [],
-          edges: [],
-        } as AutomationPipeline);
+      const isBlankAutomation =
+        selectedAutomationId === "__new" &&
+        (!automationPipeline || automationPipeline.nodes.length === 0);
 
-      const nextPipeline: AutomationPipeline = JSON.parse(JSON.stringify(existingPipeline));
+      const conditionalKeywords = ["if", "when", "whenever", "only if", "depending on", "in case", "conditional"];
+      const promptContext = (lastPromptRef.current ?? "").toLowerCase();
+      const actionsContext = JSON.stringify(actions ?? []).toLowerCase();
+      const hasConditionalCue = conditionalKeywords.some(
+        (keyword) => promptContext.includes(keyword) || actionsContext.includes(keyword),
+      );
+
+      const basePipeline: AutomationPipeline =
+        isBlankAutomation || !automationPipeline
+          ? { name: "", nodes: [], edges: [] }
+          : JSON.parse(JSON.stringify(automationPipeline));
+
+      const nextPipeline: AutomationPipeline = JSON.parse(JSON.stringify(basePipeline));
       const createdLabelSet = new Set<string>();
       const connectionSummaries: string[] = [];
       const metadataSummaries: string[] = [];
@@ -944,13 +961,42 @@ export default function AgentNetwork() {
       };
 
       const aliasMap = new Map<string, string>();
+      const conditionBridgeMap = new Map<string, string>();
+
+      const applyIntegrationDefaults = (node: { agent: string; config?: Record<string, unknown> }) => {
+        if (!node.agent) return;
+        const lower = node.agent.toLowerCase();
+        if (lower.includes("slack")) {
+          node.config = {
+            ...(node.config ?? {}),
+            connector: "slack",
+            integrationId: "slack",
+            permissions: "full",
+            useIntegration: true,
+            detectConfigFields: false,
+          };
+        }
+        if (lower.includes("jira")) {
+          node.config = {
+            ...(node.config ?? {}),
+            connector: "jira",
+            integrationId: "jira",
+            permissions: "full",
+            useIntegration: true,
+            detectConfigFields: false,
+          };
+        }
+      }; // FIX APPLIED: Connector defaults set integrationId
 
       const registerAlias = (alias: string | null | undefined, id: string) => {
         if (!alias) return;
-        aliasMap.set(alias, id);
-      };
+        const normalized = alias.trim().toLowerCase();
+        if (!normalized) return;
+        aliasMap.set(normalized, id);
+      }; // FIX APPLIED: Normalize alias keys
 
       nextPipeline.nodes.forEach((node) => {
+        applyIntegrationDefaults(node as any);
         registerAlias(node.id, node.id);
         if (typeof node.agent === "string") {
           registerAlias(node.agent, node.id);
@@ -962,7 +1008,7 @@ export default function AgentNetwork() {
           registerAlias((node.config as { agentId?: string }).agentId, (node.config as { agentId?: string }).agentId!);
         }
       });
-      const agentSnapshot = [...agents];
+      const agentSnapshot = isBlankAutomation ? [] : [...agents];
 
       agentSnapshot.forEach((agent) => {
         registerAlias(agent.id, agent.id);
@@ -973,6 +1019,7 @@ export default function AgentNetwork() {
       const ensurePipelineNode = (id: string) => {
         const existing = nextPipeline.nodes.find((node) => node.id === id);
         if (existing) {
+          applyIntegrationDefaults(existing as any);
           return existing;
         }
         const uniqueId = ensureUniqueNodeId(id);
@@ -982,6 +1029,7 @@ export default function AgentNetwork() {
           type: "Action" as AutomationNodeType,
           config: {},
         };
+        applyIntegrationDefaults(placeholder as any);
         nextPipeline.nodes.push(placeholder);
         createdLabelSet.add(id);
         newNodeIds.push(uniqueId);
@@ -990,17 +1038,22 @@ export default function AgentNetwork() {
       };
 
       const resolveNodeId = (id: string) => {
-        const mapped = aliasMap.get(id);
+        const normalized = id.trim().toLowerCase();
+        const mapped = aliasMap.get(normalized);
         if (mapped) {
           return mapped;
         }
-        if (nextPipeline.nodes.some((node) => node.id === id)) {
+        if (nextPipeline.nodes.some((node) => node.id === id || node.id.toLowerCase() === normalized)) {
           return id;
         }
-        if (agentSnapshot.some((agent) => agent.id === id)) {
+        if (agentSnapshot.some((agent) => agent.id === id || agent.id.toLowerCase?.() === normalized)) {
           return id;
         }
-        const agentByName = agentSnapshot.find((agent) => agent.name === id || agent.role === id);
+        const agentByName = agentSnapshot.find((agent) => {
+          const name = agent.name?.toLowerCase?.() ?? "";
+          const role = agent.role?.toLowerCase?.() ?? "";
+          return name === normalized || role === normalized;
+        });
         if (agentByName) {
           registerAlias(id, agentByName.id);
           return agentByName.id;
@@ -1012,6 +1065,59 @@ export default function AgentNetwork() {
         if (!metadata) return false;
         const candidates = ["persist", "persistent", "save", "persistEdge"];
         return candidates.some((key) => metadata[key] === true || metadata[key] === "true");
+      };
+
+      const ensureConditionNodeBetween = (sourceId: string, targetId: string) => {
+        const key = edgeKey(sourceId, targetId);
+        const existing = conditionBridgeMap.get(key);
+        if (existing) return existing;
+        const conditionId = ensureUniqueNodeId(`condition-${nanoid(6)}`);
+        const conditionData = {
+          condition: promptContext || "Conditional flow",
+          description: promptContext || "Conditional flow",
+        };
+        nextPipeline.nodes.push({
+          id: conditionId,
+          agent: "condition",
+          type: "condition" as AutomationNodeType,
+          label: "Condition",
+          data: conditionData,
+          position: { x: 0, y: 0 },
+          config: {},
+        });
+        newNodeIds.push(conditionId);
+        conditionBridgeMap.set(key, conditionId);
+        setPositions((current) => {
+          if (current[conditionId]) return current;
+          return { ...current, [conditionId]: { x: 0, y: 0 } };
+        });
+        pipelineChanged = true;
+        return conditionId;
+      };
+
+      const pushEdge = (fromId: string, toId: string, metadata?: Record<string, unknown>) => {
+        const exists = nextPipeline.edges.some((edge) => edge.from === fromId && edge.to === toId);
+        if (!exists) {
+          nextPipeline.edges.push({ from: fromId, to: toId });
+          pipelineChanged = true;
+        }
+        if (shouldPersistEdge(metadata)) {
+          queuePersistEdge(fromId, toId, metadata);
+        }
+      };
+
+      const connectWithCondition = (fromId: string, toId: string, metadata?: Record<string, unknown>) => {
+        const isConditionNode = (id: string) =>
+          nextPipeline.nodes.some((node) => node.id === id && node.type === "condition");
+        if (hasConditionalCue && !isConditionNode(fromId) && !isConditionNode(toId)) {
+          const conditionId = ensureConditionNodeBetween(fromId, toId);
+          pushEdge(fromId, conditionId, metadata);
+          pushEdge(conditionId, toId, metadata);
+          connectionSummaries.push(`${fromId} → ${conditionId} → ${toId}`);
+          return;
+        }
+        pushEdge(fromId, toId, metadata);
+        connectionSummaries.push(`${fromId} → ${toId}`);
       };
 
       const queuePersistEdge = (source: string, target: string, metadata?: Record<string, unknown>) => {
@@ -1069,7 +1175,7 @@ export default function AgentNetwork() {
 
         let existingId: string | null = null;
         for (const candidate of aliasCandidates) {
-          const mapped = aliasMap.get(candidate);
+          const mapped = aliasMap.get(candidate.toLowerCase());
           if (mapped) {
             existingId = mapped;
             break;
@@ -1082,7 +1188,8 @@ export default function AgentNetwork() {
             const existingAgent = agentSnapshot.find((agent) => {
               if (agent.id === candidate) return true;
               const agentName = typeof agent.name === "string" ? agent.name.toLowerCase() : "";
-              return agentName === candidateLower;
+              const agentRole = typeof agent.role === "string" ? agent.role.toLowerCase() : "";
+              return agentName === candidateLower || agentRole === candidateLower;
             });
             if (existingAgent) {
               aliasCandidates.forEach((alias) => registerAlias(alias, existingAgent.id));
@@ -1091,6 +1198,29 @@ export default function AgentNetwork() {
             }
           }
         }
+
+        if (!existingId) {
+          const normalizedType = nodePayload.agentType?.trim().toLowerCase() ?? "";
+          const connectorMatch = agentSnapshot.find((agent) => {
+            const idLower = agent.id?.toLowerCase?.() ?? "";
+            const nameLower = agent.name?.toLowerCase?.() ?? "";
+            const roleLower = agent.role?.toLowerCase?.() ?? "";
+            const matchesExact =
+              normalizedType.length > 0 &&
+              (idLower === normalizedType || nameLower === normalizedType || roleLower === normalizedType);
+            const matchesSlack =
+              normalizedType.includes("slack") &&
+              (idLower.includes("slack") || nameLower.includes("slack") || roleLower.includes("slack"));
+            const matchesJira =
+              normalizedType.includes("jira") &&
+              (idLower.includes("jira") || nameLower.includes("jira") || roleLower.includes("jira"));
+            return matchesExact || matchesSlack || matchesJira;
+          });
+          if (connectorMatch) {
+            aliasCandidates.forEach((alias) => registerAlias(alias, connectorMatch.id));
+            existingId = connectorMatch.id;
+          }
+        } // FIX APPLIED: Reuse existing connector agents
 
         const fallbackName =
           (nodePayload.label && nodePayload.label.trim().length > 0
@@ -1179,7 +1309,7 @@ export default function AgentNetwork() {
         const nodePayload = (action.node ?? {}) as CreateNodePayload;
         const { id: resolvedId, profile } = await ensureAgentMaterialized(nodePayload);
         const agentExisted = agentSnapshot.some((agent) => agent.id === resolvedId);
-        if (agentExisted && !aliasMap.has(resolvedId)) {
+        if (agentExisted && !aliasMap.has(resolvedId.toLowerCase())) {
           registerAlias(resolvedId, resolvedId);
         }
         registerAlias(nodePayload.id, resolvedId);
@@ -1198,6 +1328,9 @@ export default function AgentNetwork() {
         metadataConfig.instructions = profile.instructions;
         config.metadata = metadataConfig;
         (config as Record<string, unknown>).agentId = resolvedId;
+        const integrationTarget = { agent: agentType, config };
+        applyIntegrationDefaults(integrationTarget as any);
+        const normalizedConfig = integrationTarget.config ?? config; // FIX APPLIED: Enforce connector defaults on create
 
         const existingIndex = nextPipeline.nodes.findIndex((node) => node.id === resolvedId);
         if (existingIndex >= 0) {
@@ -1205,14 +1338,14 @@ export default function AgentNetwork() {
             ...nextPipeline.nodes[existingIndex],
             agent: agentType,
             type: nodeType,
-            config: { ...nextPipeline.nodes[existingIndex].config, ...config },
+            config: { ...nextPipeline.nodes[existingIndex].config, ...normalizedConfig },
           };
         } else {
           nextPipeline.nodes.push({
             id: resolvedId,
             agent: agentType,
             type: nodeType,
-            config,
+            config: normalizedConfig,
           });
           newNodeIds.push(resolvedId);
         }
@@ -1253,6 +1386,9 @@ export default function AgentNetwork() {
             if (action.metadata) {
               target.config = { ...target.config, metadata: { ...(target.config?.metadata as Record<string, unknown> | undefined), ...action.metadata } };
             }
+            const integrationTarget = { agent: target.agent, config: target.config };
+            applyIntegrationDefaults(integrationTarget as any);
+            target.config = integrationTarget.config; // FIX APPLIED: Connector updates carry integrationId
             if (action.position) {
               upsertPosition(resolvedId, action.position);
             }
@@ -1275,15 +1411,7 @@ export default function AgentNetwork() {
           case "connect_nodes": {
             const fromId = resolveNodeId(action.from);
             const toId = resolveNodeId(action.to);
-            const exists = nextPipeline.edges.some((edge) => edge.from === fromId && edge.to === toId);
-            if (!exists) {
-              nextPipeline.edges.push({ from: fromId, to: toId });
-              pipelineChanged = true;
-            }
-            connectionSummaries.push(`${fromId} → ${toId}`);
-            if (shouldPersistEdge(action.metadata)) {
-              queuePersistEdge(fromId, toId, action.metadata);
-            }
+            connectWithCondition(fromId, toId, action.metadata);
             break;
           }
           case "disconnect_nodes": {
@@ -1300,15 +1428,7 @@ export default function AgentNetwork() {
           case "create_edge": {
             const fromId = resolveNodeId(action.edge.from);
             const toId = resolveNodeId(action.edge.to);
-            const exists = nextPipeline.edges.some((edge) => edge.from === fromId && edge.to === toId);
-            if (!exists) {
-              nextPipeline.edges.push({ from: fromId, to: toId });
-              pipelineChanged = true;
-            }
-            connectionSummaries.push(`${fromId} → ${toId}`);
-            if (shouldPersistEdge(action.edge.metadata)) {
-              queuePersistEdge(fromId, toId, action.edge.metadata);
-            }
+            connectWithCondition(fromId, toId, action.edge.metadata);
             break;
           }
           case "delete_edge": {
@@ -1529,6 +1649,30 @@ export default function AgentNetwork() {
     const pipelineNodes =
       automationPipeline?.nodes
         .map((node, index) => {
+          if (node.type === "condition") {
+            const id = `pipeline:${node.id}`;
+            const conditionData =
+              (node as { data?: { condition?: string; description?: string } }).data ??
+              ((node.config as { conditionData?: { condition?: string; description?: string } } | undefined)?.conditionData);
+            const position =
+              positions[node.id] ??
+              generatePosition(index, (automationPipeline?.nodes.length ?? 0) + agents.length + 1);
+            return {
+              id,
+              type: "condition" as const,
+              position,
+              data: {
+                label: (node as { label?: string }).label ??
+                  ((node.config as { label?: string } | undefined)?.label) ??
+                  "Condition",
+                condition: conditionData?.condition ?? "",
+                description: conditionData?.description ?? "",
+              },
+              draggable: true,
+              selectable: true,
+              selected: selectedAgentsSet.has(id),
+            };
+          }
           const linkedAgentId =
             typeof (node.config as { agentId?: string } | undefined)?.agentId === "string"
               ? (node.config as { agentId?: string }).agentId
@@ -1583,7 +1727,7 @@ export default function AgentNetwork() {
       selected: selectedAgentId === agent.id || selectedAgentsSet.has(agent.id),
     }));
 
-    return [START_NODE, ...pipelineNodes, ...agentNodes];
+    return [...pipelineNodes, ...agentNodes];
   }, [agents, automationPipeline, graphAgents, positions, selectedAgentId, selectedAgentsSet]);
 
   useEffect(() => {
@@ -1687,50 +1831,11 @@ export default function AgentNetwork() {
     dynamicEdges.forEach(register);
     pipelineEdges.forEach(register);
 
-    const metaAgent = agents.find(isMetaControllerAgent);
-    if (metaAgent) {
-      const hasMetaConnection = combined.some(
-        (edge) => edge.source === metaAgent.id || edge.target === metaAgent.id
-      );
-      if (!hasMetaConnection) {
-        const metaEdge = {
-          id: `meta-anchor-${metaAgent.id}`,
-          source: "start",
-          target: metaAgent.id,
-          animated: true,
-          style: { stroke: "#f97316", strokeWidth: 3, opacity: 1 },
-          data: { metaController: true },
-        };
-        register(metaEdge as (typeof dynamicEdges)[number]);
-      }
-    }
+    const nodeIds = new Set<string>();
+    agents.forEach((agent) => nodeIds.add(agent.id));
+    (automationPipeline?.nodes ?? []).forEach((node) => nodeIds.add(`pipeline:${node.id}`));
 
-    const connectedTargets = new Set<string>();
-    for (const edge of combined) {
-      connectedTargets.add(edge.target);
-    }
-
-    const pipelineNodeIds = automationPipeline?.nodes.map((node) => `pipeline:${node.id}`) ?? [];
-
-    const baseEdgesAgents = agents
-      .filter((agent) => !connectedTargets.has(agent.id))
-      .map((agent) => ({
-        id: `start-${agent.id}`,
-        source: "start",
-        target: agent.id,
-        animated: false,
-        style: { stroke: "#3b82f6", strokeWidth: 1.5, opacity: 0.6 },
-      }));
-    const baseEdgesPipeline = pipelineNodeIds
-      .filter((nodeId) => !connectedTargets.has(nodeId))
-      .map((nodeId) => ({
-        id: `start-${nodeId}`,
-        source: "start",
-        target: nodeId,
-        animated: false,
-        style: { stroke: "#6366f1", strokeWidth: 1.5, opacity: 0.6, strokeDasharray: "2 2" },
-      }));
-    return [...baseEdgesAgents, ...baseEdgesPipeline, ...combined];
+    return combined.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
   }, [agents, automationPipeline, dynamicEdges, pipelineEdges, savedEdges]);
 
   const buildMergedEdges = useCallback((): PersistedEdge[] => {
@@ -1749,20 +1854,8 @@ export default function AgentNetwork() {
         },
       });
     });
-    const metaAgent = agents.find(isMetaControllerAgent);
-    if (metaAgent) {
-      const metaKey = edgeKey("start", metaAgent.id);
-      if (!merged.has(metaKey)) {
-        merged.set(metaKey, {
-          id: `start-${metaAgent.id}-meta`,
-          source: "start",
-          target: metaAgent.id,
-          metadata: { enforced: true, label: "meta-controller-anchor" },
-        });
-      }
-    }
-    return Array.from(merged.values());
-  }, [agents, graphLinks, persistedEdges]);
+      return Array.from(merged.values());
+  }, [graphLinks, persistedEdges]);
 
   const computeAutomationSignature = useCallback(() => {
     const snapshot = {
@@ -1893,63 +1986,66 @@ export default function AgentNetwork() {
 
   const handleNewAutomation = useCallback(async () => {
     await flushAutoSave();
-    setPersistingAutomation(true);
+    const blankPipeline: AutomationPipeline = {
+      name: "",
+      nodes: [],
+      edges: [],
+    };
+    const blankBlueprint: AutomationGraphBlueprint = {
+      version: 1,
+      positions: {},
+      edges: [],
+      metadata: {
+        createdAt: new Date().toISOString(),
+        createdBy: "Atlas UI",
+      },
+      pipeline: blankPipeline,
+    };
     try {
+      const record = await createAutomation("Untitled Automation", "", blankBlueprint); // FIX APPLIED: Persist blank automation immediately
       clearSelection();
-      const blankPipeline: AutomationPipeline = {
-        name: "New Automation",
-        nodes: [],
-        edges: [],
-      };
-      const blankBlueprint: AutomationGraphBlueprint = {
-        version: 1,
-        positions: {},
-        edges: [],
-        metadata: {
-          createdAt: new Date().toISOString(),
-          createdBy: "Atlas UI",
-        },
-        pipeline: blankPipeline,
-      };
       setSharedPipeline(blankPipeline, null);
       setPositions({});
       setPersistedEdges([]);
-      setAutomationName("Untitled Automation");
-      setAutomationDescription("");
+      setAutomationName(record.name);
+      setAutomationDescription(record.description ?? "");
       setAutomationOpen(true);
       setAutomationDirty(false);
-      setCurrentAutomation(null);
-      setSelectedAutomationId("__new");
+      setCurrentAutomation(record);
+      setSelectedAutomationId(record.id);
+      setAutomations((existing) => {
+        if (existing.some((entry) => entry.id === record.id)) return existing;
+        return [...existing, record];
+      });
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(LAST_ACTIVE_AUTOMATION_KEY, record.id);
+      }
       lastPersistedSignatureRef.current = (() => {
         try {
           return JSON.stringify({
             pipeline: blankPipeline,
             positions: {},
             persistedEdges: [],
-            name: "Untitled Automation",
-            description: "",
+            name: record.name ?? "",
+            description: record.description ?? "",
           });
         } catch {
           return `${Date.now()}`;
         }
       })();
-      const created = await createAutomation("Untitled Automation", undefined, blankBlueprint);
-      setAutomations((existing) => [...existing, created]);
-      applyAutomation(created);
       toast({
         title: "New automation ready",
-        description: "Customize the network layout and hit save when ready.",
+        description: "Blank canvas created. Add an agent or type a prompt below.",
       });
     } catch (error) {
+      console.error("[automation-builder] failed to create new automation", error);
       toast({
         title: "Failed to create automation",
         description: error instanceof Error ? error.message : "Unknown error occurred.",
         variant: "destructive",
       });
-    } finally {
-      setPersistingAutomation(false);
     }
-  }, [applyAutomation, clearSelection, flushAutoSave, toast, setSharedPipeline]);
+  }, [clearSelection, flushAutoSave, toast, setSharedPipeline]);
 
   const handleDeleteAutomation = useCallback(async () => {
     if (!selectedAutomationId || selectedAutomationId === "__new") {
@@ -2445,11 +2541,18 @@ export default function AgentNetwork() {
         return;
       }
 
+      lastPromptRef.current = text;
       setPromptSubmitting(true);
       setPromptStatus("Routing prompt...");
       let shouldFallbackToBuilder = false;
+      const isBlankAutomation =
+        selectedAutomationId === "__new" &&
+        (!automationPipeline || automationPipeline.nodes.length === 0);
       try {
         try {
+          if (isBlankAutomation) {
+            throw { status: 422 };
+          }
           const dispatchResult = await api.dispatchToolAgentPrompt(text, { limit: 25 });
           setPromptStatus(
             `Dispatched to ${dispatchResult.agent.name}. Check the Tool Agent Console for runtime output.`,
@@ -2488,8 +2591,10 @@ export default function AgentNetwork() {
           name: automationName,
           description: automationDescription,
         };
-        if (automationPipeline) {
+        if (automationPipeline && !isBlankAutomation) {
           context.pipeline = automationPipeline;
+        } else {
+          context.pipeline = { name: "", nodes: [], edges: [] };
         }
         const response = await api.interpretAutomationPrompt(text, context);
         if (!response?.actions || response.actions.length === 0) {

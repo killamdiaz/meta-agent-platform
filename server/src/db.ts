@@ -126,6 +126,22 @@ export async function initDb() {
     ALTER TABLE agent_memory
       ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
+    CREATE TABLE IF NOT EXISTS forge_jira_tokens (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID NOT NULL,
+      account_id UUID,
+      jira_domain TEXT,
+      cloud_id TEXT,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      scopes TEXT[] DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(org_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_forge_jira_tokens_org ON forge_jira_tokens(org_id);
+
     CREATE TABLE IF NOT EXISTS forge_integrations (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       org_id UUID NOT NULL,

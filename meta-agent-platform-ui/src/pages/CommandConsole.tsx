@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AutomationDrawer } from "@/components/AutomationDrawer";
-import { api, apiBaseUrl } from "@/lib/api";
+import { api, apiBaseUrl, API_BASE } from "@/lib/api";
 import type {
   AgentRecord,
   CommandResponse,
@@ -17,6 +17,7 @@ import type {
 import { useToast } from "@/components/ui/use-toast";
 import { useCommandHistory, type HistoryMessage } from "@/hooks/useCommandHistory";
 import { useAutomationPipelineStore } from "@/store/automationPipelineStore";
+import { useAuth } from "@/context/AuthContext";
 
 type MessageRole = "user" | "assistant" | "system";
 
@@ -137,6 +138,18 @@ function buildCommand(raw: string, agents: AgentRecord[]): { command: string; ro
     const parts = trimmed.slice(1).split(/\s+/);
     const identifier = parts.shift() ?? "";
     const remainder = parts.join(" ");
+    if (identifier.toLowerCase() === "slack") {
+      if (!remainder.trim()) {
+        throw new Error("Ask a question after @slack, e.g. @slack summarize #general last week");
+      }
+      return { command: `/slack ${remainder.trim()}` };
+    }
+    if (identifier.toLowerCase() === "jira") {
+      if (!remainder.trim()) {
+        throw new Error("Ask a question after @jira, e.g. @jira list my open tickets");
+      }
+      return { command: `/jira ${remainder.trim()}` };
+    }
     const agent = findAgentByIdentifier(agents, identifier);
     if (!agent) {
       throw new Error(`Agent ${identifier} not found`);
@@ -149,9 +162,24 @@ function buildCommand(raw: string, agents: AgentRecord[]): { command: string; ro
 
   const mentionMatch = trimmed.match(/(?:^|\s)@([\w-]+)/);
   if (mentionMatch) {
-    const agent = findAgentByIdentifier(agents, mentionMatch[1]);
+    const target = mentionMatch[1];
+    if (target.toLowerCase() === "slack") {
+      const remainder = trimmed.replace(mentionMatch[0], "").trim();
+      if (!remainder) {
+        throw new Error("Ask a question after @slack, e.g. @slack summarize #general last week");
+      }
+      return { command: `/slack ${remainder}` };
+    }
+    if (target.toLowerCase() === "jira") {
+      const remainder = trimmed.replace(mentionMatch[0], "").trim();
+      if (!remainder) {
+        throw new Error("Ask a question after @jira, e.g. @jira show me blockers");
+      }
+      return { command: `/jira ${remainder}` };
+    }
+    const agent = findAgentByIdentifier(agents, target);
     if (!agent) {
-      throw new Error(`Agent ${mentionMatch[1]} not found`);
+      throw new Error(`Agent ${target} not found`);
     }
     const remainder = trimmed.replace(mentionMatch[0], "").trim();
     return {
@@ -268,6 +296,7 @@ type TaskStreamPayload =
 export default function CommandConsole() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -286,6 +315,7 @@ export default function CommandConsole() {
   const [automationStatusMessage, setAutomationStatusMessage] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(MIN_VISIBLE_MESSAGES);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
   const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
   const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
 
@@ -830,8 +860,32 @@ export default function CommandConsole() {
     refetchInterval: 20_000,
   });
 
+  const { data: slackStatusData, isLoading: slackStatusLoading } = useQuery({
+    queryKey: ["slack-status", orgId],
+    queryFn: () => api.fetchSlackIntegrationStatus(orgId ?? undefined),
+    staleTime: 30_000,
+  });
+
+  const { data: jiraStatusData, isLoading: jiraStatusLoading } = useQuery({
+    queryKey: ["jira-status", orgId],
+    queryFn: () => api.fetchJiraIntegrationStatus(orgId ?? undefined),
+    staleTime: 30_000,
+  });
+
+  const slackConnected = slackStatusData?.status === "active";
+  const jiraConnected = jiraStatusData?.status === "active";
+  const slackInstallUrl = useMemo(() => {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
+    return `${API_BASE}/connectors/slack/api/install${query}`;
+  }, [orgId]);
+
+  const jiraInstallUrl = useMemo(() => {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
+    return `${API_BASE}/connectors/jira/api/install${query}`;
+  }, [orgId]);
+
   const commandMutation = useMutation({
-    mutationFn: (command: string) => api.runCommand(command),
+    mutationFn: (command: string) => api.runCommand(command, orgId),
     onSuccess: (response) => {
       setMessages((prev) => [
         ...prev,
@@ -937,10 +991,48 @@ export default function CommandConsole() {
     return agents.slice(0, 4).map((agent) => `@${agent.name} run a status update`);
   }, [agents]);
 
+  const showSlackCta = Boolean(!slackConnected && slackStatusData && !slackStatusLoading);
+  const showJiraCta = Boolean(!jiraConnected && jiraStatusData && !jiraStatusLoading);
+
+  const slackPseudoAgent: AgentRecord = useMemo(
+    () => ({
+      id: "slack",
+      name: "slack",
+      role: "Slack connector",
+      status: "idle",
+      objectives: [],
+      tools: {},
+      memory_context: "",
+      internet_access_enabled: false,
+      settings: {},
+      created_at: "",
+      updated_at: "",
+    }),
+    [],
+  );
+
+  const jiraPseudoAgent: AgentRecord = useMemo(
+    () => ({
+      id: "jira",
+      name: "jira",
+      role: "Jira connector",
+      status: "idle",
+      objectives: [],
+      tools: {},
+      memory_context: "",
+      internet_access_enabled: false,
+      settings: {},
+      created_at: "",
+      updated_at: "",
+    }),
+    [],
+  );
+
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null) return [];
+    const candidates = [slackPseudoAgent, jiraPseudoAgent, ...agents];
     const normalized = mentionQuery.toLowerCase();
-    return agents.filter((agent) => {
+    return candidates.filter((agent) => {
       if (!normalized) return true;
       return (
         agent.name.toLowerCase().includes(normalized) ||
@@ -948,7 +1040,7 @@ export default function CommandConsole() {
         agent.id.toLowerCase().includes(normalized)
       );
     });
-  }, [agents, mentionQuery]);
+  }, [agents, mentionQuery, slackPseudoAgent, jiraPseudoAgent]);
 
   useEffect(() => {
     if (mentionCandidates.length === 0) {
@@ -973,6 +1065,26 @@ export default function CommandConsole() {
     if (!handledByAutomation) {
       try {
         const { command } = buildCommand(trimmed, agents);
+        if (command.startsWith("/slack") && slackStatusData && slackStatusData.status !== "active") {
+          const message = "Connect Slack to query Slack channels and messages.";
+          setMessages((prev) => [...prev, createMessage({ role: "system", content: message })]);
+          setAutoScrollEnabled(true);
+          toast({
+            title: "Slack not connected",
+            description: "Click Connect Slack to finish setup.",
+          });
+          return;
+        }
+        if (command.startsWith("/jira") && jiraStatusData && jiraStatusData.status !== "active") {
+          const message = "Connect Jira to query Jira projects and issues.";
+          setMessages((prev) => [...prev, createMessage({ role: "system", content: message })]);
+          setAutoScrollEnabled(true);
+          toast({
+            title: "Jira not connected",
+            description: "Click Connect Jira to finish setup.",
+          });
+          return;
+        }
         await commandMutation.mutateAsync(command);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to process command";
@@ -1410,6 +1522,30 @@ export default function CommandConsole() {
           </div>
         </div>
       </div>
+      {showSlackCta && (
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2">
+          <Button
+            onClick={() => {
+              window.location.href = slackInstallUrl;
+            }}
+            className="bg-blue-600 text-white shadow-lg hover:bg-blue-700"
+          >
+            Connect Slack
+          </Button>
+        </div>
+      )}
+      {showJiraCta && (
+        <div className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2">
+          <Button
+            onClick={() => {
+              window.location.href = jiraInstallUrl;
+            }}
+            className="bg-blue-600 text-white shadow-lg hover:bg-blue-700"
+          >
+            Connect Jira
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

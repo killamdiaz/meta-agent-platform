@@ -26,6 +26,7 @@ function hashToUnit(value: string, salt = "") {
 function computeBrainTarget(node: GraphNodeType, index: number, total: number) {
   const baseRadiusByType: Record<GraphNodeType["type"], number> = {
     agent: 110,
+    integration: 80,
     document: 160,
     memory: 210,
   } as const;
@@ -116,8 +117,8 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       .filter((link) => link._sourceId !== link._targetId && nodeIds.has(link._sourceId) && nodeIds.has(link._targetId))
       .map(({ _sourceId, _targetId, ...link }) => link);
 
-    const agentIds = nodes.filter((node) => node.type === "agent").map((node) => node.id);
-    const nonAgentNodes = nodes.filter((node) => node.type !== "agent").map((node) => node.id);
+    const agentIds = nodes.filter((node) => node.type === "agent" || node.type === "integration").map((node) => node.id);
+    const nonAgentNodes = nodes.filter((node) => node.type !== "agent" && node.type !== "integration").map((node) => node.id);
 
     const linkSet = new Set<string>();
     links.forEach((link) => {
@@ -317,6 +318,9 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       case "agent": {
         return "#ffffff";
       }
+      case "integration": {
+        return "#f97316";
+      }
       case "memory": {
         const memoryType = node.metadata?.memoryType;
         if (memoryType === "short_term") {
@@ -336,6 +340,7 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
 
   const getNodeSize = (node: GraphNodeType) => {
     if (node.type === "agent") return 3.8;
+    if (node.type === "integration") return 4.4;
     if (node.type === "document") return 2.8;
     return 2.4;
   };

@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import axios from 'axios';
 import { config } from '../../../config.js';
 import { resolveOrgId, resolveAccountId, upsertSlackIntegration } from './shared.js';
+import { recordIntegrationNode } from '../../integrationNodes.js';
 
 export async function handleSlackActivate(req: Request, res: Response) {
   try {
@@ -63,6 +64,8 @@ export async function handleSlackActivate(req: Request, res: Response) {
       data: integrationData,
       status: 'active',
     });
+
+    await recordIntegrationNode(orgId, 'slack', { team: data.team?.name ?? data.team?.id });
 
     res.json({
       status: 'connected',

@@ -23,6 +23,7 @@ import connectorsRoute from './routes/connectors.js';
 import usageRoute from './routes/usage.js';
 import ingestionRoute from './routes/ingestion.js';
 import { startIngestionWorker } from './services/IngestionWorker.js';
+import { buildJiraApiRouter } from './connectors/jira/api/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +51,8 @@ async function bootstrap() {
   app.use('/automations', automationsRoute);
   app.use('/automation-builder', automationBuilderRoute);
   app.use('/connectors', connectorsRoute);
+  // Alias for Jira OAuth callback when redirect URI is set to /oauth/jira/callback
+  app.use('/oauth/jira', buildJiraApiRouter());
   app.use('/usage', usageRoute);
   app.use('/ingestion', ingestionRoute);
 

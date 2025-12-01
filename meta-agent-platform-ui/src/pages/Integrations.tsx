@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
 
 interface IntegrationCard {
   id: string;
@@ -96,25 +96,30 @@ const integrationCards: IntegrationCard[] = [
 
 export default function Integrations() {
   const { user } = useAuth();
+  const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
   const [loading, setLoading] = useState<string | null>(null);
   const [slackStatus, setSlackStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
+  const [jiraStatus, setJiraStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
   const [statusLoading, setStatusLoading] = useState(false);
 
   useEffect(() => {
     const fetchStatus = async () => {
       setStatusLoading(true);
       try {
-        const status = await api.fetchSlackIntegrationStatus();
+        const status = await api.fetchSlackIntegrationStatus(orgId ?? undefined);
         setSlackStatus((status.status as 'active' | 'inactive') ?? 'inactive');
+        const jira = await api.fetchJiraIntegrationStatus(orgId ?? undefined);
+        setJiraStatus((jira.status as 'active' | 'inactive') ?? 'inactive');
       } catch (error) {
         console.warn('[integrations] slack status lookup failed', error);
         setSlackStatus('inactive');
+        setJiraStatus('inactive');
       } finally {
         setStatusLoading(false);
       }
     };
     fetchStatus();
-  }, []);
+  }, [orgId]);
 
   const handleIntegrationClick = async (integration: IntegrationCard) => {
     if (integration.comingSoon) {
@@ -134,7 +139,11 @@ export default function Integrations() {
       if (integration.id === "okta-saml") {
         window.location.href = "/settings/saml";
       } else if (integration.id === "slack") {
-        window.location.href = "/connectors/slack/api/install";
+        const orgQuery = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
+        window.location.href = `${API_BASE}/connectors/slack/api/install${orgQuery}`;
+      } else if (integration.id === "jira") {
+        const orgQuery = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
+        window.location.href = `${API_BASE}/connectors/jira/api/install${orgQuery}`;
       } else if (integration.id === "github") {
         window.location.href = "/oauth/github";
       } else {
@@ -164,7 +173,9 @@ export default function Integrations() {
           const Icon = integration.icon;
           const isLoading = loading === integration.id;
           const isSlack = integration.id === "slack";
+          const isJira = integration.id === "jira";
           const isConnected = isSlack && slackStatus === "active";
+          const jiraConnected = isJira && jiraStatus === "active";
 
           return (
             <Card key={integration.id} className="hover:shadow-md transition-shadow">
@@ -186,9 +197,16 @@ export default function Integrations() {
                           SOON
                         </Badge>
                       )}
-                      {isSlack && (
-                        <Badge variant={isConnected ? "default" : "outline"} className="text-xs">
-                          {isConnected ? "Connected" : statusLoading ? "Checking..." : "Not connected"}
+                      {(isSlack || isJira) && (
+                        <Badge
+                          variant={isSlack ? (isConnected ? "default" : "outline") : jiraConnected ? "default" : "outline"}
+                          className={`text-xs ${jiraConnected || isConnected ? "bg-blue-100 text-blue-700" : ""}`}
+                        >
+                          {(isSlack ? isConnected : jiraConnected)
+                            ? "Connected"
+                            : statusLoading
+                              ? "Checking..."
+                              : "Not connected"}
                         </Badge>
                       )}
                     </CardTitle>
@@ -201,7 +219,11 @@ export default function Integrations() {
 
                 <Button
                   variant={integration.comingSoon ? "secondary" : "outline"}
-                  disabled={isLoading || integration.comingSoon || (isConnected && !statusLoading)}
+                  disabled={
+                    isLoading ||
+                    integration.comingSoon ||
+                    ((isConnected || jiraConnected) && !statusLoading)
+                  }
                   className="w-full"
                   onClick={() => handleIntegrationClick(integration)}
                 >

@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TrendingUp, Activity, BarChart3, Gauge, Coins, PieChart } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import { useTokenStore } from "@/store/tokenStore";
 
 type BreakdownRow = { source?: string; agent_name?: string; total_tokens: number; total_cost: number };
 type ModelRow = { model_name: string; model_provider: string; total_tokens: number; total_cost: number };
@@ -37,6 +38,7 @@ export default function Billing() {
   const [agents, setAgents] = useState<BreakdownRow[] | null>(null);
   const [filter, setFilter] = useState<string>("30d");
   const [loading, setLoading] = useState(true);
+  const setTokenUsage = useTokenStore((state) => state.setUsage);
 
   useEffect(() => {
     if (!orgId || authLoading) return;
@@ -55,6 +57,12 @@ export default function Billing() {
         setSources(b);
         setModels(m);
         setAgents(a);
+        if (s?.total_tokens !== undefined) {
+          setTokenUsage({
+            total: Number(s.total_tokens) || 0,
+            byAgent: {}, // Billing summary is aggregate; agent-level handled elsewhere
+          });
+        }
       } finally {
         setLoading(false);
       }

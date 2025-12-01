@@ -12,16 +12,15 @@ const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
   { name: "Overview", href: "/", icon: LayoutDashboard },
-  { name: "Billing", href: "/billing", icon: Coins },
   { name: "Integrations", href: "/integrations", icon: Boxes },
   { name: "Data Sources", href: "/data-sources", icon: Database },
-  { name: "Collaboration Lab", href: "/multi-agent", icon: Users },
   { name: "Command Console", href: "/console", icon: MessageSquare },
   { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
 ];
 
 const bottomNav = [
   { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Billing", href: "/billing", icon: Coins },
   { name: "Help", href: "/help", icon: HelpCircle },
 ];
 
@@ -36,12 +35,29 @@ export function AppSidebar() {
   const tokensLastUpdated = useTokenStore((state) => state.lastUpdated);
   const setTokenUsage = useTokenStore((state) => state.setUsage);
   const { user } = useAuth();
+  const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
 
   useEffect(() => {
     if (overview?.tokenUsage) {
       setTokenUsage(overview.tokenUsage);
     }
   }, [overview, setTokenUsage]);
+
+  useQuery({
+    queryKey: ["usage", "summary", orgId],
+    queryFn: () => api.fetchUsageSummary(orgId as string),
+    enabled: Boolean(orgId),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    onSuccess: (summary) => {
+      if (summary?.total_tokens !== undefined) {
+        setTokenUsage({
+          total: Number(summary.total_tokens) || 0,
+          byAgent: {},
+        });
+      }
+    },
+  });
 
   const usage = useMemo(() => {
     if (!overview) {

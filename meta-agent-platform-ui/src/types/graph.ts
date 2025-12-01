@@ -1,4 +1,4 @@
-export type NodeType = "document" | "memory" | "agent";
+export type NodeType = "document" | "memory" | "agent" | "integration";
 export type NodeStatus = "active" | "new" | "older" | "forgotten" | "expiring";
 export type RelationType = "derived" | "updated" | "referenced" | "similar" | "extends" | "shared";
 

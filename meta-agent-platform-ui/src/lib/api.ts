@@ -14,7 +14,7 @@ import type {
   AutomationInterpretationResponse,
 } from '@/types/api';
 
-const API_BASE = (() => {
+export const API_BASE = (() => {
   const configured = import.meta.env.VITE_API_BASE_URL;
 
   const normalize = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
@@ -144,10 +144,10 @@ export const api = {
     });
   },
 
-  runCommand(input: string): Promise<CommandResponse> {
+  runCommand(input: string, orgId?: string | null): Promise<CommandResponse> {
     return request('/commands', {
       method: 'POST',
-      body: JSON.stringify({ input }),
+      body: JSON.stringify({ input, org_id: orgId ?? undefined }),
     });
   },
 
@@ -285,6 +285,11 @@ export const api = {
   fetchSlackIntegrationStatus(orgId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
     const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
     return request(`/connectors/slack/api/status${query}`);
+  },
+
+  fetchJiraIntegrationStatus(orgId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
+    return request(`/connectors/jira/api/status${query}`);
   },
 
   fetchUsageSummary(orgId: string) {
