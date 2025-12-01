@@ -281,6 +281,70 @@ export const api = {
       }),
     });
   },
+
+  fetchSlackIntegrationStatus(orgId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
+    return request(`/connectors/slack/api/status${query}`);
+  },
+
+  fetchUsageSummary(orgId: string) {
+    return request<{ total_tokens: number; total_cost: number }>(`/usage/summary?org_id=${encodeURIComponent(orgId)}`);
+  },
+
+  fetchUsageDaily(orgId: string) {
+    return request<Array<{ bucket: string; total_tokens: number; total_cost: number }>>(
+      `/usage/daily?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageMonthly(orgId: string) {
+    return request<Array<{ bucket: string; total_tokens: number; total_cost: number }>>(
+      `/usage/monthly?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageBreakdown(orgId: string) {
+    return request<Array<{ source: string; total_tokens: number; total_cost: number }>>(
+      `/usage/breakdown?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageModels(orgId: string) {
+    return request<Array<{ model_name: string; model_provider: string; total_tokens: number; total_cost: number }>>(
+      `/usage/models?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageAgents(orgId: string) {
+    return request<Array<{ agent_name: string; total_tokens: number; total_cost: number }>>(
+      `/usage/agents?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  searchIngestion(orgId: string, query: string) {
+    return request<{ items: Array<{ id: string; source_type: string; source_id: string; content: string; metadata: Record<string, unknown>; created_at: string }> }>(
+      `/ingestion/search?org_id=${encodeURIComponent(orgId)}&q=${encodeURIComponent(query)}`
+    );
+  },
+
+  listImportJobs(orgId: string) {
+    return request<Array<{ id: string; org_id: string; source: string; status: string; progress: number; created_at: string }>>(
+      `/ingestion/jobs?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  createImportJob(orgId: string, source: string) {
+    return request(`/ingestion/jobs`, {
+      method: "POST",
+      body: JSON.stringify({ org_id: orgId, source }),
+    });
+  },
+
+  deleteImportJob(orgId: string, id: string) {
+    return request(`/ingestion/jobs/${encodeURIComponent(id)}?org_id=${encodeURIComponent(orgId)}`, {
+      method: "DELETE",
+    });
+  },
 };
 
 export type ApiClient = typeof api;

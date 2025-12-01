@@ -30,6 +30,8 @@ const KEY_PROMPTS: Record<AutomationAgentName, string> = {
   AtlasTasksAgent: 'Atlas module access uses the main Atlas Bridge credentials already provided.',
   AtlasNotifyAgent: 'Atlas module access uses the main Atlas Bridge credentials already provided.',
   AtlasWorkspaceAgent: 'Atlas module access uses the main Atlas Bridge credentials already provided.',
+  JiraAgent: 'Jira access requires your API token.',
+  JiraTrigger: 'Jira trigger requires API token and site URL.',
 };
 
 const AGENTS_REQUIRING_KEYS = new Set<AutomationAgentName>([
@@ -39,6 +41,8 @@ const AGENTS_REQUIRING_KEYS = new Set<AutomationAgentName>([
   'DiscordAgent',
   'EmailSenderAgent',
   'AtlasBridgeAgent',
+  'JiraAgent',
+  'JiraTrigger',
 ]);
 
 export interface AutomationRepository {

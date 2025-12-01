@@ -126,6 +126,31 @@ export async function initDb() {
     ALTER TABLE agent_memory
       ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
+    CREATE TABLE IF NOT EXISTS forge_integrations (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID NOT NULL,
+      account_id UUID,
+      connector_type TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'inactive',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(org_id, connector_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS forge_embeddings (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID NOT NULL,
+      account_id UUID,
+      source_type TEXT NOT NULL,
+      source_id TEXT,
+      content TEXT NOT NULL,
+      embedding VECTOR(1536),
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      visibility_scope TEXT DEFAULT 'org',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_agent_memory_agent_id ON agent_memory(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_memory_memory_type ON agent_memory(memory_type);
     CREATE INDEX IF NOT EXISTS idx_agent_memory_expires_at ON agent_memory(expires_at);
@@ -133,6 +158,55 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_sent_messages_status ON sent_messages(status);
     CREATE INDEX IF NOT EXISTS idx_controller_approvals_status ON controller_approvals(status);
     CREATE INDEX IF NOT EXISTS idx_agent_configs_agent_id ON agent_configs(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_forge_embeddings_org_source ON forge_embeddings(org_id, source_type);
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_forge_embeddings_embedding'
+      ) THEN
+        CREATE INDEX idx_forge_embeddings_embedding ON forge_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+      END IF;
+    END$$;
+
+    CREATE TABLE IF NOT EXISTS forge_token_usage (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID,
+      account_id UUID,
+      user_id UUID,
+      source TEXT,
+      agent_name TEXT,
+      model_name TEXT,
+      model_provider TEXT,
+      input_tokens INT,
+      output_tokens INT,
+      total_tokens INT,
+      cost_usd NUMERIC(12,6),
+      metadata JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_forge_token_usage_org ON forge_token_usage(org_id);
+    CREATE INDEX IF NOT EXISTS idx_forge_token_usage_account ON forge_token_usage(account_id);
+    CREATE INDEX IF NOT EXISTS idx_forge_token_usage_created ON forge_token_usage(created_at);
+    CREATE INDEX IF NOT EXISTS idx_forge_token_usage_provider ON forge_token_usage(model_provider);
+
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID,
+      account_id UUID,
+      source TEXT,
+      status TEXT DEFAULT 'queued',
+      progress INT DEFAULT 0,
+      error_count INT DEFAULT 0,
+      total_records INT DEFAULT 0,
+      processed_records INT DEFAULT 0,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_jobs_org ON import_jobs(org_id);
+    ALTER TABLE import_jobs
+      ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS total_records INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS processed_records INT DEFAULT 0;
   `);
 }
 

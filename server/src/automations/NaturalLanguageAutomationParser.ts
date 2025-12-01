@@ -7,10 +7,13 @@ import {
   type AutomationNodeType,
   type AutomationEdge,
 } from './types.js';
+import { autoConnectSlackWorkflow } from '../connectors/slack/workflows/workflowAutoConnect.js';
 
 const KEY_REQUIRED_AGENTS = new Set<AutomationAgentName>([
   'SlackTrigger',
   'SlackAgent',
+  'JiraAgent',
+  'JiraTrigger',
   'NotionAgent',
   'DiscordAgent',
   'EmailSenderAgent',
@@ -329,7 +332,7 @@ export class NaturalLanguageAutomationParser {
       edges.push({ from: nodes[index].id, to: nodes[index + 1].id });
     }
 
-    const pipeline: AutomationPipeline = {
+    let pipeline: AutomationPipeline = {
       name: this.inferName(text, matchedTrigger.node.agent, actionMatchesResolved.map((action) => action.node.agent)),
       nodes,
       edges,
@@ -338,6 +341,10 @@ export class NaturalLanguageAutomationParser {
     const triggerLogLabel = inferredTriggerLabel ?? matchedTrigger.node.agent;
     const outputLogLabel = inferredOutputLabel ?? actionMatchesResolved.map((action) => action.node.agent).join(',');
     console.log(`[automation-builder] trigger=${triggerLogLabel} output=${outputLogLabel}`);
+
+    const autoConnected = autoConnectSlackWorkflow(text, pipeline);
+    pipeline = autoConnected.pipeline;
+    autoConnected.requiresKeys.forEach((agent) => requiresKeys.add(agent));
 
     return {
       pipeline,

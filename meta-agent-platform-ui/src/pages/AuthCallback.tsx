@@ -2,23 +2,71 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 
+const sanitizeRedirect = (value: string | null) => {
+  if (!value || typeof window === 'undefined') {
+    return '/';
+  }
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    decoded = value;
+  }
+  if (decoded.startsWith('/')) {
+    return decoded;
+  }
+  try {
+    const url = new URL(decoded, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      return '/';
+    }
+    const normalized = `${url.pathname}${url.search}${url.hash}`;
+    return normalized || '/';
+  } catch {
+    return '/';
+  }
+};
+
 export default function AuthCallback() {
   const location = useLocation();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const accessToken = params.get('token') || params.get('access_token');
-    const refreshToken = params.get('refresh_token');
-    const redirect = params.get('redirect');
-
-    if (!accessToken || !refreshToken) {
-      setError('Missing access or refresh token.');
-      return;
-    }
-
     const restore = async () => {
+      const searchParams = new URLSearchParams(location.search);
+      const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+
+      const redirect = searchParams.get('redirect') || hashParams.get('redirect');
+
+      // Support both query and hash params, plus "token"/"refresh" from Atlas redirect.
+      const accessToken =
+        searchParams.get('token') ||
+        searchParams.get('access_token') ||
+        hashParams.get('token') ||
+        hashParams.get('access_token');
+      const refreshToken =
+        searchParams.get('refresh') ||
+        searchParams.get('refresh_token') ||
+        hashParams.get('refresh') ||
+        hashParams.get('refresh_token');
+
+      if (!accessToken || !refreshToken) {
+        // If Supabase already initialized the session (e.g., via hash parsing), just continue.
+        const { data, error } = await supabase.auth.getSession();
+        if (error) {
+          setError(error.message);
+          return;
+        }
+        if (data.session) {
+          const destination = sanitizeRedirect(redirect);
+          navigate(destination, { replace: true });
+          return;
+        }
+        setError('Missing access or refresh token.');
+        return;
+      }
+
       const { error } = await supabase.auth.setSession({
         access_token: accessToken,
         refresh_token: refreshToken,
@@ -28,14 +76,12 @@ export default function AuthCallback() {
         return;
       }
 
-      if (typeof window !== 'undefined') {
-        const target = redirect ? decodeURIComponent(redirect) : '/';
-        navigate(target, { replace: true });
-      }
+      const destination = sanitizeRedirect(redirect);
+      navigate(destination, { replace: true });
     };
 
     restore();
-  }, [location.search, navigate]);
+  }, [location.search, location.hash, navigate]);
 
   if (error) {
     return (

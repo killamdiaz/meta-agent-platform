@@ -19,6 +19,10 @@ import automationsRoute from './routes/automations.js';
 import { toolRuntime } from './multiAgent/ToolRuntime.js';
 import agentConfigRoute from './routes/agentConfig.js';
 import automationBuilderRoute from './routes/automationBuilder.js';
+import connectorsRoute from './routes/connectors.js';
+import usageRoute from './routes/usage.js';
+import ingestionRoute from './routes/ingestion.js';
+import { startIngestionWorker } from './services/IngestionWorker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +49,9 @@ async function bootstrap() {
   app.use('/multi-agent', multiAgentRoute);
   app.use('/automations', automationsRoute);
   app.use('/automation-builder', automationBuilderRoute);
+  app.use('/connectors', connectorsRoute);
+  app.use('/usage', usageRoute);
+  app.use('/ingestion', ingestionRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
@@ -60,6 +67,9 @@ async function bootstrap() {
       '/multi-agent',
       '/meta-controller',
       '/automations',
+      '/connectors',
+      '/ingestion',
+      '/usage',
       '/healthz'
     ];
     app.use(express.static(publicDir));
@@ -88,6 +98,7 @@ async function bootstrap() {
   await metaController.getMetaAgentId();
   coordinator.start();
   await toolRuntime.initialise();
+  startIngestionWorker();
 }
 
 bootstrap().catch((error) => {

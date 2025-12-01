@@ -9,18 +9,19 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "@slack/web-api": "^7.4.0",
     "axios": "^1.12.2",
     "cheerio": "^1.1.2",
     "cors": "2.8.5",
     "domhandler": "^5.0.3",
     "dotenv": "16.4.5",
     "express": "4.19.2",
+    "googleapis": "^140.0.0",
     "node-fetch": "^3.3.2",
     "openai": "4.47.3",
     "pg": "8.11.5",
-    "@slack/web-api": "^7.4.0",
-    "@notionhq/client": "^2.2.15",
-    "googleapis": "^140.0.0",
+    "playwright-core": "^1.43.1",
     "zod": "3.22.4"
   },
   "devDependencies": {

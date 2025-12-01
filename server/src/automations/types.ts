@@ -24,6 +24,8 @@ export type AutomationAgentName =
   | 'CronTrigger'
   | 'SummarizerAgent'
   | 'SlackAgent'
+  | 'JiraAgent'
+  | 'JiraTrigger'
   | 'NotionAgent'
   | 'DiscordAgent'
   | 'EmailSenderAgent'

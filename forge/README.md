@@ -15,10 +15,13 @@ NEXT_PUBLIC_META_AGENT_ID=forge
 META_AGENT_SECRET=meta_agent_secret_goes_here                # **server-side only**
 
 NEXT_PUBLIC_ATLAS_LOGIN_URL=https://atlasos.app/login
+NEXT_PUBLIC_SUPABASE_SAML_PROVIDER_ID=provider_uuid_here     # optional, enable SAML/Okta
+# or set NEXT_PUBLIC_SUPABASE_SSO_DOMAIN=company.com         # optional fallback domain
 ```
 
 - `NEXT_PUBLIC_*` keys are embedded in the client bundle and therefore safe only when Supabase marks them as public (the anon key and Atlas login URL).
 - `SUPABASE_SERVICE_ROLE_KEY` and `META_AGENT_SECRET` must never be shipped to the browser. Use them only in server-side code (API routes, middleware, edge functions).
+- SAML/Okta can be enabled by providing `NEXT_PUBLIC_SUPABASE_SAML_PROVIDER_ID` (preferred) or `NEXT_PUBLIC_SUPABASE_SSO_DOMAIN`. Without one of these values, the enterprise SSO button is disabled in the login UI.
 
 ## Project structure
 
@@ -46,7 +49,7 @@ forge/
 - Restores sessions on page refresh.
 
 ### ProtectedRoute (`src/components/ProtectedRoute.tsx`)
-- Redirects unauthenticated visitors to the Atlas login page, preserving the current URL with `?redirect=`.
+- Redirects unauthenticated visitors to the custom Forge login screen (`/login`) while preserving the requested URL via `?redirect=`.
 - Shows a fallback loader while the auth state is being resolved.
 
 ### Bridge client (`src/lib/bridgeClient.ts`)
@@ -54,8 +57,8 @@ forge/
 - Provides helper methods (`getUserSummary`, `getInvoices`, `createTask`) for convenience.
 
 ### Pages
-- `/login` — simple redirector to the Atlas login page (adds `source=forge`).
-- `/auth/callback` — reads query params (`token`, `refresh_token`), sets the Supabase session, and sends users to `/dashboard`.
+- `/login` — immersive Atlas Forge login experience that lets users choose Atlas credentials or SAML/Okta before redirecting into the respective flow.
+- `/auth/callback` — reads query params (`token`, `refresh_token`), sets the Supabase session, and sends users to `/dashboard` (or the original URL encoded in `redirect`).
 - `/dashboard` — example protected page showing how to use the `AtlasBridgeClient`.
 
 ## Usage
@@ -91,9 +94,10 @@ export default function DashboardPage() {
 
 ## Testing checklist
 
-- [ ] Visiting `/login` redirects you to the Atlas login experience.
-- [ ] Returning to `/auth/callback` with `token` + `refresh_token` sets the Supabase session.
+- [ ] Visiting `/login` shows the Atlas Forge login UI with both options (Atlas + SAML/Okta when configured).
+- [ ] Clicking "Login with Atlas" redirects to the Atlas login domain with `source=forge` and returns through `/auth/callback`.
+- [ ] Clicking the SAML/Okta option launches the Supabase SAML flow (when the provider ID or domain is configured).
+- [ ] Returning to `/auth/callback` with `token` + `refresh_token` sets the Supabase session and redirects back to the original URL or `/dashboard`.
 - [ ] `supabase.auth.getUser()` returns a valid Atlas user inside guarded components.
 - [ ] Bridge API calls succeed using the signed JWT.
 - [ ] Logging out clears both Forge and Atlas sessions (Supabase handles cross-domain sign-out).
-

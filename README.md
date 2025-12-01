@@ -78,6 +78,7 @@ VITE_API_BASE=http://localhost:4000
 - **Meta Bridge Credentials** – Server-side agents that talk to Atlas Forge require `META_AGENT_SECRET` (already referenced in `.env`) and a valid JWT. Set `META_AGENT_JWT` (or `ATLAS_BRIDGE_TOKEN`) to the Supabase access token that should be used for bridge calls. Without it, the MetaCortex bus suppresses `/bridge-notify` fan-out.
 - **HMAC Signing** – Requests to `https://lighdepncfhiecqllmod.supabase.co/functions/v1` now flow through the shared `AtlasBridgeClient`, which signs every call with `X-Agent-Id` and `X-Agent-Signature` (HMAC SHA-256 of `agentId + jwt`). Retry/backoff for `401/429` is built in and GET responses are cached for five minutes.
 - **Built-in Atlas Agents** – The runtime ships specialised agents (`MemoryGraphAgent`, `TaskAgent`, `CalendarAgent`, `FinanceAgent`, `EmailMonitoringAgent`, `AISummarizerAgent`, `AnalyticsAgent`, and `MetaControllerAgent`) that automatically call their assigned Forge endpoints and collaborate via `request_context` / `context_response` bus events. Register them through the dashboard or CLI and provide per-agent bridge credentials under the new `bridge` configuration block.
+- **Dashboard Login** – The dashboard at `http://localhost:3000` now shows an Atlas Forge-themed login screen. Configure `VITE_SUPABASE_SAML_PROVIDER_ID` (or `VITE_SUPABASE_SSO_DOMAIN`) in `.env` to enable the enterprise SAML/Okta option; otherwise only the default Atlas login button is active.
 
 ### Dual-Model Router
 

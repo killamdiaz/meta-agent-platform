@@ -9,18 +9,22 @@ interface ProtectedRouteProps {
   loadingFallback?: React.ReactNode;
 }
 
-const atlasLoginUrl = process.env.NEXT_PUBLIC_ATLAS_LOGIN_URL ?? 'https://atlasos.app/login';
-
 export default function ProtectedRoute({ children, loadingFallback = <div>Loading...</div> }: ProtectedRouteProps) {
   const { user, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) {
-      const redirectUrl = encodeURIComponent(window.location.href);
-      window.location.href = `${atlasLoginUrl}?source=forge&redirect=${redirectUrl}`;
+    if (loading || user || typeof window === 'undefined') {
+      return;
     }
-  }, [loading, user]);
+    const requestedPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const search = requestedPath ? `?redirect=${encodeURIComponent(requestedPath)}` : '';
+    const loginPath = `/login${search}`;
+    if (router.asPath === loginPath) {
+      return;
+    }
+    router.replace(loginPath);
+  }, [loading, user, router]);
 
   if (loading || (!user && typeof window !== 'undefined')) {
     return <>{loadingFallback}</>;
@@ -32,4 +36,3 @@ export default function ProtectedRoute({ children, loadingFallback = <div>Loadin
 
   return <>{children}</>;
 }
-

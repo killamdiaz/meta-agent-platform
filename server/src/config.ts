@@ -16,5 +16,16 @@ export const config = {
   metaControllerAgentRole:
     process.env.META_CONTROLLER_AGENT_ROLE ||
     'Supervisory AI overseeing all subordinate agents, responsible for coordination, safety, and approvals.',
-  metaControllerAutoApprove: String(process.env.META_CONTROLLER_AUTO_APPROVE || '').toLowerCase() === 'true'
+  metaControllerAutoApprove: String(process.env.META_CONTROLLER_AUTO_APPROVE || '').toLowerCase() === 'true',
+  slackClientId: process.env.SLACK_CLIENT_ID || '',
+  slackClientSecret: process.env.SLACK_CLIENT_SECRET || '',
+  slackSigningSecret: process.env.SLACK_SIGNING_SECRET || '',
+  slackAppId: process.env.SLACK_APP_ID || '',
+  slackRedirectUrl: process.env.SLACK_REDIRECT_URL || '',
+  slackScopes: process.env.SLACK_SCOPES || 'app_mentions:read,channels:history,chat:write,files:read,commands,users:read,im:history',
+  defaultOrgId: process.env.DEFAULT_ORG_ID || '',
+  defaultAccountId: process.env.DEFAULT_ACCOUNT_ID || '',
+  modelRouterUrl: process.env.MODEL_ROUTER_URL || '',
+  crawlAdditionalPaths: process.env.CRAWL_ADDITIONAL_PATHS || '',
+  crawlMaxPages: Number(process.env.CRAWL_MAX_PAGES || 50)
 };

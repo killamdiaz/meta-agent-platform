@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { streamLocalLLM } from './local-llm.js';
-import { generateGPT, streamGPT, gptAvailable } from './gpt-reasoner.js';
+import { generateGPT, gptAvailable } from './gpt-reasoner.js';
 import { runLocalManaged } from './LocalLLMManager.js';
 
 interface RouteOptions {
@@ -38,9 +38,7 @@ export async function routeMessage(options: RouteOptions): Promise<string> {
         : await runLocalManaged(buildLocalPrompt(prompt, context));
       localFailureCount = 0;
     } else {
-      text = stream
-        ? await streamGPT({ prompt, context, intent, stream, onToken })
-        : await generateGPT({ prompt, context, intent, stream });
+      text = await generateGPT({ prompt, context, intent, stream });
     }
     const duration = Math.round(performance.now() - start);
     console.log(`[router] model=${model} time=${duration}ms tokens≈${approxTokens}`);
@@ -51,9 +49,7 @@ export async function routeMessage(options: RouteOptions): Promise<string> {
       console.warn(`[router] local model failed (${duration}ms). Falling back to GPT.`, (error as Error).message);
       localFailureCount += 1;
       localUnavailableUntil = Date.now() + LOCAL_BACKOFF_MS;
-      const text = stream
-        ? await streamGPT({ prompt, context, intent, stream, onToken })
-        : await generateGPT({ prompt, context, intent, stream });
+      const text = await generateGPT({ prompt, context, intent, stream });
       const fallbackDuration = Math.round(performance.now() - start);
       console.log(`[router] model=gpt time=${fallbackDuration}ms tokens≈${approxTokens}`);
       return text.trim();

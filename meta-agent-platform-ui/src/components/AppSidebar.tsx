@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio } from "lucide-react";
+import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio, Boxes, Database, Coins } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,9 @@ const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
   { name: "Overview", href: "/", icon: LayoutDashboard },
+  { name: "Billing", href: "/billing", icon: Coins },
+  { name: "Integrations", href: "/integrations", icon: Boxes },
+  { name: "Data Sources", href: "/data-sources", icon: Database },
   { name: "Collaboration Lab", href: "/multi-agent", icon: Users },
   { name: "Command Console", href: "/console", icon: MessageSquare },
   { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
@@ -75,7 +78,7 @@ export function AppSidebar() {
   }, [user]);
 
   return (
-    <div className="flex h-screen w-64 flex-col bg-sidebar">
+    <div className="flex h-screen w-64 flex-shrink-0 flex-col bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 items-center px-6">
         <div className="flex items-center gap-2">

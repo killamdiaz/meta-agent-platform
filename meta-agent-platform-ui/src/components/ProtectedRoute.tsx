@@ -1,20 +1,20 @@
 import { useEffect } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-
-const ATLAS_LOGIN_URL = import.meta.env.VITE_ATLAS_LOGIN_URL || 'https://atlasos.app/login';
 
 export default function ProtectedRoute() {
   const { user, loading } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && !user) {
-      const currentUrl = window.location.origin + location.pathname + window.location.search;
-      const redirectParam = encodeURIComponent(currentUrl);
-      window.location.href = `${ATLAS_LOGIN_URL}?source=forge&redirect=${redirectParam}`;
+    if (loading || user) {
+      return;
     }
-  }, [loading, user, location.pathname, location.search]);
+    const requestedPath = `${location.pathname}${location.search}${location.hash}`;
+    const search = requestedPath ? `?redirect=${encodeURIComponent(requestedPath)}` : '';
+    navigate(`/login${search}`, { replace: true });
+  }, [loading, user, location.pathname, location.search, location.hash, navigate]);
 
   if (loading || (!user && typeof window !== 'undefined')) {
     return <div className="flex h-screen items-center justify-center text-muted-foreground">Authenticating…</div>;

@@ -1,10 +1,6 @@
-import OpenAI from 'openai';
+import { chatCompletion } from '../services/ModelRouterWrapper.js';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? '';
-const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
-const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 45000);
-
-const client = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 
 interface GPTRequestOptions {
   prompt: string;
@@ -13,12 +9,8 @@ interface GPTRequestOptions {
   stream?: boolean;
 }
 
-interface GPTStreamOptions extends GPTRequestOptions {
-  onToken?: (token: string) => void;
-}
-
 function buildMessages({ prompt, context }: { prompt: string; context?: string }) {
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+  const messages: Array<{ role: 'user' | 'system'; content: string }> = [];
   if (context) {
     messages.push({ role: 'system', content: context });
   }
@@ -27,56 +19,18 @@ function buildMessages({ prompt, context }: { prompt: string; context?: string }
 }
 
 export async function generateGPT(options: GPTRequestOptions): Promise<string> {
-  if (!client) {
-    throw new Error('OPENAI_API_KEY missing; cannot use GPT model.');
-  }
   const messages = buildMessages(options);
 
-  if (!options.stream) {
-    const response = await client.chat.completions.create(
-      {
-        model: DEFAULT_MODEL,
-        messages,
-        temperature: 0.4,
-      },
-      { timeout: OPENAI_TIMEOUT_MS },
-    );
-    return response.choices?.[0]?.message?.content?.trim() ?? '';
-  }
-
-  return streamGPT({ ...options });
-}
-
-export async function streamGPT(options: GPTStreamOptions): Promise<string> {
-  if (!client) {
-    throw new Error('OPENAI_API_KEY missing; cannot use GPT model.');
-  }
-  const messages = buildMessages(options);
-  let final = '';
-
-  const stream = await client.chat.completions.create(
-    {
-      model: DEFAULT_MODEL,
-      messages,
-      temperature: 0.4,
-      stream: true,
-    },
-    { timeout: OPENAI_TIMEOUT_MS },
-  );
-
-  for await (const part of stream) {
-    const token = part.choices?.[0]?.delta?.content ?? '';
-    if (token) {
-      final += token;
-      if (typeof options.onToken === 'function') {
-        options.onToken(token);
-      }
-    }
-  }
-
-  return final;
+  const response = await chatCompletion({
+    model: DEFAULT_MODEL,
+    messages,
+    temperature: 0.4,
+    source: options.intent ?? 'gpt-reasoner',
+    agent_name: 'GPTReasoner',
+  });
+  return response.content?.trim() ?? '';
 }
 
 export function gptAvailable(): boolean {
-  return Boolean(client);
+  return true;
 }
