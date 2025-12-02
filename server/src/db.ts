@@ -1,6 +1,7 @@
 import pkg from 'pg';
 const { Pool } = pkg;
 import { config } from './config.js';
+import crypto from 'crypto';
 
 export const pool = new Pool({
   connectionString: config.databaseUrl
@@ -241,7 +242,45 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0,
       ADD COLUMN IF NOT EXISTS total_records INT DEFAULT 0,
       ADD COLUMN IF NOT EXISTS processed_records INT DEFAULT 0;
+
+    CREATE TABLE IF NOT EXISTS licenses (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      customer_name TEXT NOT NULL,
+      customer_id TEXT NOT NULL,
+      issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      max_seats INT NOT NULL,
+      max_tokens BIGINT NOT NULL,
+      license_key TEXT UNIQUE NOT NULL,
+      active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_licenses_customer ON licenses(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_licenses_active ON licenses(active);
+    ALTER TABLE licenses
+      ALTER COLUMN customer_id TYPE TEXT USING customer_id::text;
+
+    -- minimal users table to support license linkage if not present
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      email TEXT,
+      license_id UUID REFERENCES licenses(id)
+    );
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS license_id UUID REFERENCES licenses(id);
   `);
+
+  if (process.env.NODE_ENV !== 'production') {
+    const devCustomerId = process.env.DEFAULT_ORG_ID || 'dev-org';
+    const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const signature = crypto.createHmac('sha256', config.licenseSecret).update(`${devCustomerId}:${expires}`).digest('hex');
+    const devKey = `${devCustomerId}:${expires}:${signature}`;
+    await pool.query(
+      `INSERT INTO licenses (customer_name, customer_id, issued_at, expires_at, max_seats, max_tokens, license_key, active)
+       VALUES ($1, $2, NOW(), NOW() + interval '365 days', 1000, 1000000000, $3, TRUE)
+       ON CONFLICT (license_key) DO NOTHING`,
+      ['Development License', devCustomerId, devKey],
+    );
+  }
 }
 
 export async function withTransaction<T>(fn: (client: import('pg').PoolClient) => Promise<T>) {

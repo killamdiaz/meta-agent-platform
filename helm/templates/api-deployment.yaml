@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forge-api
+  template:
+    metadata:
+      labels:
+        app: forge-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.registry }}/forge-api:{{ .Values.tag }}"
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.apiPort }}
+          env:
+            - name: LICENSE_KEY
+              value: "{{ .Values.global.licenseKey }}"
+            - name: LICENSE_SECRET
+              value: "{{ .Values.global.env.LICENSE_SECRET }}"
+            - name: DATABASE_URL
+              value: "{{ .Values.global.env.DATABASE_URL }}"
+            - name: REDIS_URL
+              value: "{{ .Values.global.env.REDIS_URL }}"
+            - name: CURRENT_VERSION
+              value: "{{ .Values.global.env.CURRENT_VERSION }}"
+            - name: LATEST_VERSION
+              value: "{{ .Values.global.env.LATEST_VERSION }}"

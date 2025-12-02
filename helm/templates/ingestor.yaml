@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-ingestor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forge-ingestor
+  template:
+    metadata:
+      labels:
+        app: forge-ingestor
+    spec:
+      containers:
+        - name: ingestor
+          image: "{{ .Values.registry }}/ingestor:{{ .Values.tag }}"
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env:
+            - name: LICENSE_KEY
+              value: "{{ .Values.global.licenseKey }}"
+            - name: DATABASE_URL
+              value: "{{ .Values.global.env.DATABASE_URL }}"
+            - name: REDIS_URL
+              value: "{{ .Values.global.env.REDIS_URL }}"

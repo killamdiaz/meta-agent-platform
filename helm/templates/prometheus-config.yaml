@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: 'forge-api'
+        static_configs:
+          - targets: ['forge-api:4000']
+      - job_name: 'forge-orchestrator'
+        static_configs:
+          - targets: ['forge-orchestrator:5000']
+      - job_name: 'slack-enterprise-bot'
+        static_configs:
+          - targets: ['slack-enterprise-bot:8000']

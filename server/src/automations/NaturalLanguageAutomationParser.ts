@@ -154,6 +154,11 @@ const ACTION_PATTERNS: Array<{
       };
     },
   },
+  {
+    agent: 'JiraAgent',
+    matcher: (input) => /\bjira\b/i.test(input) || /\bjira\b.*\b(issue|ticket)/i.test(input),
+    buildConfig: (input) => buildJiraConfig(input),
+  },
 ];
 
 const ATLAS_MODULES: Array<{
@@ -245,6 +250,46 @@ function buildCronConfig(input: string) {
   return {
     schedule: `${minute} ${hour} ${dayOfMonth} ${month} ${dayOfWeek}`,
     timezone,
+  };
+}
+
+function buildJiraConfig(input: string) {
+  const lower = input.toLowerCase();
+  const wantsAttachments = /\b(attachment|file|screenshot|log)s?\b/i.test(input);
+  const wantsFollowUps = /\bfollow[-\s]?up\b/i.test(lower) || /next steps?|action items?/i.test(lower);
+  const wantsDrafts = /\bdraft\b|\bcomment\b|\breply\b|\brespond\b/i.test(input);
+  const wantsPatterns = /\bpattern\b|\btrend\b|\bsignal\b/i.test(lower);
+  const wantsGrouping = /\bgroup\b|\bregroup\b|\bbucket\b|\bcategor/i.test(lower);
+  const wantsImpact = /\bcustomer\b|\bimpact\b|\bsev(erity)?\b/i.test(lower);
+  const wantsSummaries = /\bsummar/i.test(lower) || /\bdigest\b/i.test(lower);
+  const wantsSearch = /\bsearch\b|\bfind\b|\blookup\b|\bquery\b/i.test(lower);
+
+  const actions = {
+    search: wantsSearch || wantsSummaries || wantsAttachments,
+    summarize: wantsSummaries || wantsSearch,
+    attachments: wantsAttachments || wantsSearch,
+    followUps: wantsFollowUps,
+    draftResponse: wantsDrafts,
+    analyzePatterns: wantsPatterns,
+    regroupIssues: wantsGrouping,
+    customerImpact: wantsImpact,
+  };
+
+  const anyRequested = Object.values(actions).some(Boolean);
+  if (!anyRequested) {
+    actions.search = true;
+    actions.summarize = true;
+    actions.attachments = true;
+    actions.followUps = true;
+    actions.draftResponse = true;
+    actions.analyzePatterns = true;
+    actions.regroupIssues = true;
+    actions.customerImpact = true;
+  }
+
+  return {
+    query: input,
+    actions,
   };
 }
 

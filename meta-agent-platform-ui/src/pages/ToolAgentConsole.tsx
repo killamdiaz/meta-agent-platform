@@ -26,8 +26,15 @@ interface ToolAgentLogEntry {
   metadata: Record<string, unknown>;
 }
 
+const withLicense = () => {
+  const headers: Record<string, string> = {};
+  const key = localStorage.getItem("forge_license_key");
+  if (key) headers["x-license-key"] = key;
+  return headers;
+};
+
 const fetchToolAgents = async (): Promise<ToolAgentSnapshot[]> => {
-  const response = await fetch(`${apiBaseUrl}/multi-agent/tool-agents`);
+  const response = await fetch(`${apiBaseUrl}/multi-agent/tool-agents`, { headers: withLicense() });
   if (!response.ok) {
     throw new Error(await response.text());
   }
@@ -36,7 +43,9 @@ const fetchToolAgents = async (): Promise<ToolAgentSnapshot[]> => {
 };
 
 const fetchToolAgentLogs = async (agentId: string, limit = 200): Promise<ToolAgentLogEntry[]> => {
-  const response = await fetch(`${apiBaseUrl}/multi-agent/tool-agents/${agentId}/logs?limit=${limit}`);
+  const response = await fetch(`${apiBaseUrl}/multi-agent/tool-agents/${agentId}/logs?limit=${limit}`, {
+    headers: withLicense(),
+  });
   if (!response.ok) {
     throw new Error(await response.text());
   }

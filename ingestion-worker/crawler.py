@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import os
 from typing import List, Dict, Set, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -115,7 +116,13 @@ async def _block_unwanted_resources(route):
         await route.continue_()
 
 
-async def crawl_site(start_url: str, additional_paths: List[str], max_pages: int, on_progress=None) -> List[Dict[str, str]]:
+async def crawl_site(
+    start_url: str,
+    additional_paths: List[str],
+    max_pages: int,
+    on_progress=None,
+    on_page=None,
+) -> List[Dict[str, str]]:
     if not PLAYWRIGHT_AVAILABLE:
         logger.critical("Playwright is not installed. Cannot start crawler.")
         return []
@@ -140,6 +147,8 @@ async def crawl_site(start_url: str, additional_paths: List[str], max_pages: int
     visited: Set[str] = set()
     scraped_data: List[Dict[str, str]] = []
 
+    browser_ws = os.environ.get("BROWSER_WS_URL") or "ws://browser:3000"
+
     async with async_playwright() as p:
         browser: Optional[Browser] = None
 
@@ -147,14 +156,14 @@ async def crawl_site(start_url: str, additional_paths: List[str], max_pages: int
             nonlocal browser
             if browser and browser.is_connected():
                 return browser
-            logger.info("Connecting to browser service at ws://browser:3000...")
+            logger.info(f"Connecting to browser service at {browser_ws}...")
             try:
-                browser = await p.chromium.connect_over_cdp("ws://browser:3000")
+                browser = await p.chromium.connect_over_cdp(browser_ws)
                 browser.on("disconnected", lambda: logger.warning("Browser service disconnected. Will attempt reconnect on next page."))
                 logger.info("Successfully connected to browser service.")
                 return browser
             except Exception as e:
-                logger.error(f"Failed to connect to browser: {e}")
+                logger.error(f"Failed to connect to browser at {browser_ws}: {e}")
                 return None
 
         browser = await get_or_connect_browser()
@@ -206,12 +215,13 @@ async def crawl_site(start_url: str, additional_paths: List[str], max_pages: int
                 content_data = _extract_main_content(soup, normalized_url)
 
                 if content_data["content"] and "JavaScript has been disabled" not in content_data["content"] and len(content_data["content"]) > 100:
-                    scraped_data.append({
+                    page_payload = {
                         "url": normalized_url,
                         "title": content_data["title"],
                         "content": content_data["content"]
-                    })
-                    logger.info(f"   ... content extracted successfully (Title: {content_data['title']}).")
+                    }
+                    scraped_data.append(page_payload)
+                    logger.info(f"   ... content extracted cc successfully (Title: {content_data['title']}).")
                 else:
                     logger.warning(f"   ... no meaningful content found on page.")
 
@@ -224,6 +234,19 @@ async def crawl_site(start_url: str, additional_paths: List[str], max_pages: int
                         queue.append(normalized_link)
                         new_links_found += 1
                 logger.info(f"   ... found and queued {new_links_found} new links.")
+                if on_page and content_data["content"]:
+                    stats = {
+                        "visited": len(visited),
+                        "queued": len(queue),
+                        "scraped": len(scraped_data),
+                        "discovered": len(visited) + len(queue),
+                        "new_links": new_links_found,
+                    }
+                    try:
+                        await on_page(page_payload, stats)
+                    except Exception as e:
+                        logger.error(f"on_page callback failed for {normalized_url}: {e}")
+                        raise
 
             except PlaywrightError as e:
                 if "Target page, context or browser has been closed" in str(e):

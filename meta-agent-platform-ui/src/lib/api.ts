@@ -50,11 +50,16 @@ type ApiError = Error & { status?: number };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...rest } = options;
+  const mergedHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(headers as Record<string, string>),
+  };
+  const licenseKey = localStorage.getItem('forge_license_key');
+  if (licenseKey) {
+    mergedHeaders['x-license-key'] = licenseKey;
+  }
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers ?? {}),
-    },
+    headers: mergedHeaders,
     ...rest,
   });
 
@@ -324,6 +329,47 @@ export const api = {
     return request<Array<{ agent_name: string; total_tokens: number; total_cost: number }>>(
       `/usage/agents?org_id=${encodeURIComponent(orgId)}`
     );
+  },
+
+  fetchLicenseStatus(orgId: string, licenseKey?: string) {
+    const params = new URLSearchParams();
+    if (orgId) params.set("org_id", orgId);
+    if (licenseKey) params.set("license_key", licenseKey);
+    const qs = params.toString();
+    return request<{
+      license_id: string;
+      customer_name: string;
+      customer_id: string;
+      expires_at: string;
+      max_seats: number;
+      max_tokens: number;
+      license_key: string;
+      seats_used: number;
+      tokens_used: number;
+      valid: boolean;
+      reason?: string;
+    }>(`/api/license/status${qs ? `?${qs}` : ""}`);
+  },
+
+  validateLicense(license_key: string) {
+    return request('/api/license/validate', {
+      method: 'POST',
+      body: JSON.stringify({ license_key }),
+    });
+  },
+
+  refreshLicense(license_key: string) {
+    return request('/api/license/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ license_key }),
+    });
+  },
+
+  applyLicense(orgId: string, license_key: string) {
+    return request('/api/license/apply', {
+      method: 'POST',
+      body: JSON.stringify({ org_id: orgId, license_key }),
+    });
   },
 
   searchIngestion(orgId: string, query: string) {

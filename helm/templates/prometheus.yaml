@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forge-prometheus
+  template:
+    metadata:
+      labels:
+        app: forge-prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: "{{ .Values.prometheus.image }}"
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: forge-prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-prometheus
+spec:
+  type: ClusterIP
+  selector:
+    app: forge-prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090

@@ -1,0 +1,8 @@
+{
+  "title": "Orchestrator Metrics",
+  "panels": [
+    { "type": "graph", "title": "Automations executed", "targets": [{ "expr": "automations_executed_total" }] },
+    { "type": "graph", "title": "Queue depth", "targets": [{ "expr": "ingestion_queue_depth" }] },
+    { "type": "graph", "title": "Errors per minute", "targets": [{ "expr": "rate(error_count_total[1m])" }] }
+  ]
+}

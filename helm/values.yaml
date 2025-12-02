@@ -1,0 +1,46 @@
+registry: registry.atlasos.app/forge
+tag: "1.0.0"
+pullPolicy: IfNotPresent
+
+global:
+  licenseKey: ""
+  env:
+    LICENSE_SECRET: ""
+    DATABASE_URL: "postgres://postgres:postgres@postgres:5432/postgres"
+    REDIS_URL: "redis://redis:6379"
+    CURRENT_VERSION: "1.0.0"
+    LATEST_VERSION: "1.0.0"
+
+ingress:
+  enabled: false
+  host: forge.local
+
+resources: {}
+
+service:
+  type: ClusterIP
+  apiPort: 4000
+  orchestratorPort: 5000
+  slackBotPort: 8000
+
+redis:
+  image: redis:7
+  storage: 1Gi
+
+postgres:
+  image: postgres:15
+  storage: 10Gi
+  username: postgres
+  password: postgres
+  database: postgres
+
+grafana:
+  image: grafana/grafana:10.2.0
+  adminUser: admin
+  adminPassword: admin
+
+prometheus:
+  image: prom/prometheus:v2.49.1
+
+nginx:
+  image: nginx:1.25

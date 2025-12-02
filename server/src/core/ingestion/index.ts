@@ -72,8 +72,9 @@ export async function embedContent(text: string): Promise<number[]> {
 }
 
 export async function storeEmbeddings(records: IngestionRecord[]) {
-  if (!records.length) return;
+  if (!records.length) return [];
   const client = await pool.connect();
+  const inserted: Array<{ id: string; org_id: string; source_id: string | null }> = [];
   try {
     await client.query('BEGIN');
     for (const record of records) {
@@ -83,30 +84,77 @@ export async function storeEmbeddings(records: IngestionRecord[]) {
         throw new Error('orgId is required to store embeddings');
       }
       const chunks = chunkText(record.content);
-      for (const chunk of chunks) {
-        const embedding = await embedContent(chunk);
-        if (!embedding.length) {
+      if (!chunks.length) {
+        console.warn('[storeEmbeddings] no chunks produced for source', record.sourceId || 'unknown');
+        continue;
+      }
+      chunks.forEach((chunk, idx) => {
+        console.log(
+          '[storeEmbeddings] preparing chunk',
+          JSON.stringify({
+            org_id: orgId,
+            source_id: record.sourceId ?? null,
+            chunk_index: idx + 1,
+            chunk_length: chunk.length,
+            total_chunks: chunks.length,
+          }),
+        );
+      });
+
+      for (const [idx, chunk] of chunks.entries()) {
+        let embedding: number[] = [];
+        try {
+          embedding = await embedContent(chunk);
+          console.log(
+            '[storeEmbeddings] embedding computed',
+            JSON.stringify({
+              org_id: orgId,
+              source_id: record.sourceId ?? null,
+              chunk_index: idx + 1,
+              embedding_length: embedding.length,
+            }),
+          );
+        } catch (err) {
+          console.error('[storeEmbeddings] embedding call failed', err);
           continue;
         }
-        await client.query(
-          `INSERT INTO forge_embeddings (org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            orgId,
-            accountId,
-            record.sourceType,
-            record.sourceId ?? null,
-            chunk,
-            toPgVector(embedding),
-            record.metadata ?? {},
-            record.visibilityScope ?? 'org',
-          ],
-        );
+        if (!embedding.length) {
+          console.warn('[storeEmbeddings] empty embedding for chunk; skipping', { source: record.sourceId });
+          continue;
+        }
+        try {
+          const { rows } = await client.query(
+            `INSERT INTO forge_embeddings (org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+             RETURNING id, org_id, source_id`,
+            [
+              orgId,
+              accountId,
+              record.sourceType,
+              record.sourceId ?? null,
+              chunk,
+              toPgVector(embedding),
+              JSON.stringify(record.metadata ?? {}),
+              record.visibilityScope ?? 'org',
+            ],
+          );
+          const row = rows[0];
+          inserted.push(row);
+          console.log(
+            '[storeEmbeddings] inserted',
+            JSON.stringify({ id: row.id, org_id: row.org_id, source_id: row.source_id }),
+          );
+        } catch (err) {
+          console.error('[storeEmbeddings] insert failed, rolling back chunk', err);
+          throw err;
+        }
       }
     }
     await client.query('COMMIT');
+    return inserted;
   } catch (error) {
     await client.query('ROLLBACK');
+    console.error('[storeEmbeddings] transaction rolled back', error);
     throw error;
   } finally {
     client.release();

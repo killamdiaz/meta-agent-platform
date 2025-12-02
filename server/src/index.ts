@@ -25,6 +25,9 @@ import ingestionRoute from './routes/ingestion.js';
 import { startIngestionWorker } from './services/IngestionWorker.js';
 import { buildJiraApiRouter } from './connectors/jira/api/index.js';
 import { errorCounter, metricsHandler, requestCounter } from './metrics.js';
+import { validateLicense } from './middleware/license.js';
+import licenseRoute from './routes/license.js';
+import deploymentRoute from './routes/deployment.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +49,10 @@ async function bootstrap() {
   });
 
   app.get('/metrics', metricsHandler());
+
+  app.use('/api/license', licenseRoute);
+  app.use('/api/deployment', deploymentRoute);
+  app.use(validateLicense);
 
   app.use('/agents', agentsRoute);
   app.use('/tasks', tasksRoute);

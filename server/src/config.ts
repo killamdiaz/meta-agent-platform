@@ -33,5 +33,6 @@ export const config = {
   defaultAccountId: process.env.DEFAULT_ACCOUNT_ID || '',
   modelRouterUrl: process.env.MODEL_ROUTER_URL || '',
   crawlAdditionalPaths: process.env.CRAWL_ADDITIONAL_PATHS || '',
-  crawlMaxPages: Number(process.env.CRAWL_MAX_PAGES || 50)
+  crawlMaxPages: Number(process.env.CRAWL_MAX_PAGES || 50),
+  licenseSecret: process.env.LICENSE_SECRET || 'dev-license-secret'
 };

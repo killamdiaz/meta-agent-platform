@@ -52,7 +52,7 @@ const integrationCards: IntegrationCard[] = [
   {
     id: "jira",
     title: "Jira Cloud",
-    description: "Sync tickets, create tasks, and pull sprint data directly into Forge.",
+    description: "Sync tickets, create tasks, and enrich Jira workflows inside Forge.",
     icon: GitBranch,
     actionText: "Connect",
   },
