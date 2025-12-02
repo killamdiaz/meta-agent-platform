@@ -23,6 +23,11 @@ export interface RagCitation {
 export interface RagAnswer {
   answer: string;
   citations: RagCitation[];
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
 }
 
 function toPgVector(values: number[]) {
@@ -83,5 +88,13 @@ export async function ragAnswer(options: RagAnswerOptions): Promise<RagAnswer> {
 
   const answer = completion.content || 'No answer generated.';
 
-  return { answer, citations };
+  return {
+    answer,
+    citations,
+    usage: {
+      prompt_tokens: completion.usage.prompt_tokens,
+      completion_tokens: completion.usage.completion_tokens,
+      total_tokens: completion.usage.total_tokens,
+    },
+  };
 }

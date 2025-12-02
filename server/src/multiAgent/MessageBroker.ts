@@ -63,6 +63,8 @@ export interface TokenUsageSnapshot {
   byAgent: Record<string, number>;
 }
 
+const AGENT_COMMS_DISABLED = process.env.AGENT_COMMS_DISABLED === 'true';
+
 export class MessageBroker extends EventEmitter {
   private readonly history: AgentMessage[] = [];
   private readonly topicSubscribers = new Map<string, Set<string>>();
@@ -90,6 +92,10 @@ export class MessageBroker extends EventEmitter {
       timestamp,
       content,
     };
+    if (AGENT_COMMS_DISABLED) {
+      // FIX APPLIED: Agent-to-agent comms disabled
+      return message;
+    }
     this.history.push(message);
     this.trackTokenUsage(message);
     this.emit('message', message);
@@ -97,6 +103,9 @@ export class MessageBroker extends EventEmitter {
   }
 
   emitStateChange(update: AgentStateChange) {
+    if (AGENT_COMMS_DISABLED) {
+      return; // FIX APPLIED: Agent-to-agent comms disabled
+    }
     this.applyStateChange(update);
     this.emit('agent:state', update);
   }
@@ -166,6 +175,16 @@ export class MessageBroker extends EventEmitter {
   }
 
   getGraphSnapshot(): BrokerGraphSnapshot {
+    if (AGENT_COMMS_DISABLED) {
+      return {
+        agents: Array.from(this.agents.values()).map((agent) => ({
+          ...agent,
+          connections: [],
+          isTalking: false,
+        })),
+        links: [],
+      };
+    }
     const now = Date.now();
     const links: BrokerLinkDescriptor[] = [];
     for (const link of this.links.values()) {

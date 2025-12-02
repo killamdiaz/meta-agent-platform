@@ -4,6 +4,7 @@ import logging
 import json
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from prometheus_client import Counter, Gauge, start_http_server
 
 import crawler
 import db
@@ -21,6 +22,13 @@ POLL_INTERVAL = int(os.environ.get("INGESTION_POLL_MS", "5000"))
 client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 EMBED_INPUT_PRICE_PER_1K = float(os.environ.get("OPENAI_EMBED_INPUT_COST_PER_1K", 0.00002))
+
+requests_total = Counter("requests_total", "Total ingestion jobs processed")
+errors_total = Counter("errors_total", "Total ingestion errors")
+workflow_runs_total = Counter("workflow_runs_total", "Workflow runs processed by ingestor")
+ingestor_docs_parsed_total = Counter("ingestor_docs_parsed_total", "Total documents parsed")
+ingestor_queue_depth = Gauge("ingestor_queue_depth", "Queued ingestion jobs")
+tokens_consumed_total = Counter("tokens_consumed_total", "Total tokens consumed by ingestor")
 
 
 async def embed_chunks(chunks):
@@ -44,6 +52,7 @@ async def process_job(conn, job):
         return
 
     logger.info(f"Processing job {job_id} source={source}")
+    requests_total.inc()
     db.update_job(conn, job_id, status='processing', progress=5, metadata=json.dumps({"current_url": source}))
 
     pages = await crawler.crawl_site(source, CRAWL_ADDITIONAL_PATHS, CRAWL_MAX_PAGES, on_progress=lambda url: asyncio.create_task(_mark_url(conn, job_id, url)))
@@ -75,6 +84,7 @@ async def process_job(conn, job):
             )
             processed_chunks += 1
         # record token usage for this batch
+        tokens_consumed_total.inc(prompt_tokens)
         db.insert_usage(
             conn,
             org_id,
@@ -95,6 +105,8 @@ async def process_job(conn, job):
         db.update_job(conn, job_id, progress=progress, processed_records=processed_chunks, metadata=json.dumps({"current_url": page.get('url')}))
 
     db.update_job(conn, job_id, status='completed', progress=100, processed_records=processed_chunks, total_records=total_chunks)
+    ingestor_docs_parsed_total.inc(processed_chunks)
+    workflow_runs_total.inc()
     logger.info(f"Job {job_id} completed pages={total_pages} chunks={processed_chunks}")
 
 
@@ -103,14 +115,20 @@ async def _mark_url(conn, job_id, url):
 
 
 async def poll_loop():
+    start_http_server(9302)
     while True:
         try:
             with db.get_conn() as conn:
                 job = db.fetch_next_job(conn)
                 if job:
+                    ingestor_queue_depth.set(1)
                     await process_job(conn, job)
+                    ingestor_queue_depth.set(0)
+                else:
+                    ingestor_queue_depth.set(0)
         except Exception as e:
             logger.error(f"Polling error: {e}")
+            errors_total.inc()
         await asyncio.sleep(POLL_INTERVAL / 1000)
 
 

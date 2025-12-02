@@ -19,6 +19,8 @@ export interface SlackEventContext {
   orgId: string;
   accountId?: string;
   slackClient: SlackConnectorClient;
+  teamId?: string;
+  eventType: string;
 }
 
 export async function handleDirectMessage(event: DirectMessageEvent, ctx: SlackEventContext) {
@@ -32,6 +34,8 @@ export async function handleDirectMessage(event: DirectMessageEvent, ctx: SlackE
     text,
     threadTs: event.thread_ts,
     slackClient: ctx.slackClient,
+    teamId: ctx.teamId,
+    eventType: ctx.eventType,
   };
 
   switch (intent) {
@@ -60,6 +64,12 @@ export async function handleDirectMessage(event: DirectMessageEvent, ctx: SlackE
         text,
         threadTs: event.thread_ts,
         slackClient: ctx.slackClient,
+        slackMetadata: {
+          team_id: ctx.teamId,
+          user_id: event.user,
+          channel_id: event.channel,
+          event_type: ctx.eventType,
+        },
       });
       break;
   }

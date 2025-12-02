@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { estimateCostUsd } from '../utils/costCalculator.js';
+import { tokensConsumed } from '../metrics.js';
 
 type Provider = 'openai' | 'local';
 
@@ -96,6 +97,23 @@ async function logUsage({
       metadata ?? {},
     ],
   );
+  console.log(
+    JSON.stringify({
+      event: 'billing_usage',
+      source: source ?? 'unknown',
+      org_id,
+      account_id,
+      user_id,
+      agent_name,
+      model,
+      provider,
+      promptTokens,
+      completionTokens,
+      totalTokens: total,
+      cost_usd: cost,
+      timestamp: new Date().toISOString(),
+    }),
+  );
   return { total, cost_usd: cost };
 }
 
@@ -154,6 +172,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
     completionTokens,
     metadata: params.metadata,
   });
+  tokensConsumed.inc(promptTokens + completionTokens);
 
   return {
     content,

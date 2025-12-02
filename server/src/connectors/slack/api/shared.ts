@@ -56,3 +56,12 @@ export async function fetchSlackIntegration(orgId: string): Promise<SlackIntegra
   );
   return rows[0] ?? null;
 }
+
+export async function fetchSlackIntegrationByTeamId(teamId?: string | null): Promise<SlackIntegrationRow | null> {
+  if (!teamId) return null;
+  const { rows } = await pool.query<SlackIntegrationRow>(
+    `SELECT * FROM forge_integrations WHERE connector_type = 'slack' AND data->>'team_id' = $1 LIMIT 1`,
+    [teamId],
+  );
+  return rows[0] ?? null;
+}

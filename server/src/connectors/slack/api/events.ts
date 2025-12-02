@@ -1,5 +1,11 @@
 import express from 'express';
-import { resolveOrgId, resolveAccountId, fetchSlackIntegration, upsertSlackIntegration } from './shared.js';
+import {
+  resolveOrgId,
+  resolveAccountId,
+  fetchSlackIntegration,
+  fetchSlackIntegrationByTeamId,
+  upsertSlackIntegration,
+} from './shared.js';
 import { SlackConnectorClient } from '../client/slackClient.js';
 import { handleAppMention } from '../events/appMention.js';
 import { handleDirectMessage } from '../events/directMessage.js';
@@ -45,27 +51,38 @@ slackEventsRouter.post('/events', async (req, res) => {
     return;
   }
 
-  const resolvedOrgId = resolveOrgId(req) ?? payload.team_id;
-  const accountId = resolveAccountId(req) ?? undefined;
-  if (!resolvedOrgId) {
+  const teamId = payload.team_id;
+  let orgId = resolveOrgId(req) ?? null;
+  let accountId = resolveAccountId(req) ?? null;
+
+  let integration = orgId ? await fetchSlackIntegration(orgId) : null;
+  if (!integration && teamId) {
+    integration = await fetchSlackIntegrationByTeamId(teamId);
+    if (integration) {
+      orgId = integration.org_id;
+      accountId = accountId ?? integration.account_id ?? null;
+    }
+  }
+
+  if (!orgId) {
     res.status(400).json({ message: 'org_id required' });
     return;
   }
 
-  const orgId = resolvedOrgId as string;
+  const resolvedOrgId = orgId as string;
+  const resolvedAccountId = accountId ?? undefined;
 
-  const integration = await fetchSlackIntegration(orgId);
   const botToken = (integration?.data as { bot_token?: string })?.bot_token;
-  if (!botToken) {
+  if (!botToken || !integration) {
     res.status(401).json({ message: 'Slack connector not activated' });
     return;
   }
 
   // Mark integration as active when events flow succeeds.
   await upsertSlackIntegration({
-    orgId,
-    accountId,
-    data: integration?.data ?? { bot_token: botToken, team_id: payload.team_id },
+    orgId: resolvedOrgId,
+    accountId: resolvedAccountId,
+    data: integration.data ?? { bot_token: botToken, team_id: teamId },
     status: 'active',
   });
 
@@ -75,17 +92,17 @@ slackEventsRouter.post('/events', async (req, res) => {
     if (event.type === 'app_mention') {
       await handleAppMention(
         { text: event.text, user: event.user, channel: event.channel!, thread_ts: event.thread_ts ?? event.ts },
-        { orgId, accountId, slackClient },
+        { orgId: resolvedOrgId, accountId: resolvedAccountId, slackClient, teamId: payload.team_id, eventType: 'app_mention' },
       );
     } else if (event.type === 'message' && event.channel_type === 'im') {
       await handleDirectMessage(
         { text: event.text, user: event.user, channel: event.channel!, thread_ts: event.thread_ts ?? event.ts },
-        { orgId, accountId, slackClient },
+        { orgId: resolvedOrgId, accountId: resolvedAccountId, slackClient, teamId: payload.team_id, eventType: 'direct_message' },
       );
     } else if (event.type === 'message') {
       await handleChannelMessage(
         { text: event.text, user: event.user, channel: event.channel!, thread_ts: event.thread_ts ?? event.ts },
-        { orgId, accountId, slackClient },
+        { orgId: resolvedOrgId, accountId: resolvedAccountId, slackClient, teamId: payload.team_id, eventType: 'channel_message' },
       );
     } else if (event.type === 'file_shared') {
       await handleFileShared(
@@ -94,7 +111,7 @@ slackEventsRouter.post('/events', async (req, res) => {
           user: event.user,
           channel_id: event.channel,
         },
-        { orgId, accountId, botToken },
+        { orgId: resolvedOrgId, accountId: resolvedAccountId, botToken },
       );
     }
 

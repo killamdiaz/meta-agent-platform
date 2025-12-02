@@ -24,6 +24,7 @@ import usageRoute from './routes/usage.js';
 import ingestionRoute from './routes/ingestion.js';
 import { startIngestionWorker } from './services/IngestionWorker.js';
 import { buildJiraApiRouter } from './connectors/jira/api/index.js';
+import { errorCounter, metricsHandler, requestCounter } from './metrics.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,9 +36,16 @@ async function bootstrap() {
   app.use(cors());
   app.use(express.json());
 
+  app.use((req, _res, next) => {
+    requestCounter.inc({ route: req.path, method: req.method });
+    next();
+  });
+
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  app.get('/metrics', metricsHandler());
 
   app.use('/agents', agentsRoute);
   app.use('/tasks', tasksRoute);
@@ -89,8 +97,9 @@ async function bootstrap() {
     });
   }
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);
+    errorCounter.inc({ route: req.path, method: req.method, status: 400 });
     res.status(400).json({ message: err instanceof Error ? err.message : 'Unknown error' });
   });
 

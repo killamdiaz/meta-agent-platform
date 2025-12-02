@@ -13,6 +13,8 @@ export interface SlackEventContext {
   orgId: string;
   accountId?: string;
   slackClient: SlackConnectorClient;
+  teamId?: string;
+  eventType: string;
 }
 
 export async function handleChannelMessage(event: ChannelMessageEvent, ctx: SlackEventContext) {
@@ -44,5 +46,11 @@ export async function handleChannelMessage(event: ChannelMessageEvent, ctx: Slac
     text,
     threadTs: event.thread_ts,
     slackClient: ctx.slackClient,
+    slackMetadata: {
+      team_id: ctx.teamId,
+      user_id: event.user,
+      channel_id: event.channel,
+      event_type: ctx.eventType,
+    },
   });
 }

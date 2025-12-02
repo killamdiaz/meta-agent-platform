@@ -21,8 +21,8 @@ router.get('/summary', async (req, res, next) => {
         COALESCE(SUM(total_tokens),0) AS total_tokens,
         COALESCE(SUM(cost_usd),0) AS total_cost
        FROM forge_token_usage
-      WHERE org_id = $1`,
-      [orgId]
+      WHERE org_id = $1 OR org_id IS NULL`,
+      [orgId],
     );
     res.json(rows[0] ?? { total_tokens: 0, total_cost: 0 });
   } catch (error) {
@@ -38,7 +38,7 @@ router.get('/daily', async (req, res, next) => {
               SUM(total_tokens) AS total_tokens,
               SUM(cost_usd) AS total_cost
          FROM forge_token_usage
-        WHERE org_id = $1
+        WHERE org_id = $1 OR org_id IS NULL
         GROUP BY bucket
         ORDER BY bucket DESC
         LIMIT 30`,
@@ -58,7 +58,7 @@ router.get('/monthly', async (req, res, next) => {
               SUM(total_tokens) AS total_tokens,
               SUM(cost_usd) AS total_cost
          FROM forge_token_usage
-        WHERE org_id = $1
+        WHERE org_id = $1 OR org_id IS NULL
         GROUP BY bucket
         ORDER BY bucket DESC
         LIMIT 12`,
@@ -78,7 +78,7 @@ router.get('/breakdown', async (req, res, next) => {
               SUM(total_tokens) AS total_tokens,
               SUM(cost_usd) AS total_cost
          FROM forge_token_usage
-        WHERE org_id = $1
+        WHERE org_id = $1 OR org_id IS NULL
         GROUP BY source
         ORDER BY total_tokens DESC`,
       [orgId]
@@ -98,7 +98,7 @@ router.get('/models', async (req, res, next) => {
               SUM(total_tokens) AS total_tokens,
               SUM(cost_usd) AS total_cost
          FROM forge_token_usage
-        WHERE org_id = $1
+        WHERE org_id = $1 OR org_id IS NULL
         GROUP BY model_name, model_provider
         ORDER BY total_tokens DESC`,
       [orgId]
@@ -117,7 +117,7 @@ router.get('/agents', async (req, res, next) => {
               SUM(total_tokens) AS total_tokens,
               SUM(cost_usd) AS total_cost
          FROM forge_token_usage
-        WHERE org_id = $1
+        WHERE org_id = $1 OR org_id IS NULL
         GROUP BY agent_name
         ORDER BY total_tokens DESC`,
       [orgId]

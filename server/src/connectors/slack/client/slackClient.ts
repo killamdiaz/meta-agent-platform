@@ -9,6 +9,7 @@ export interface SlackPostMessageInput {
   channel: string;
   text: string;
   thread_ts?: string;
+  blocks?: any[];
 }
 
 export class SlackConnectorClient {
@@ -27,6 +28,7 @@ export class SlackConnectorClient {
       channel,
       text: payload.text,
       thread_ts: payload.thread_ts,
+      blocks: payload.blocks,
     });
   }
 

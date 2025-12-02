@@ -1,0 +1,34 @@
+{
+  "title": "Billing & Usage",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Tokens Consumed",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "tokens_consumed_total" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Slack Workspace Installs",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "slack_workspace_installs_total" }
+      ],
+      "id": 2
+    },
+    {
+      "type": "logs",
+      "title": "Billing Events (Loki)",
+      "datasource": "Loki",
+      "targets": [
+        { "expr": "{component=\"billing\"}" }
+      ],
+      "id": 3
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

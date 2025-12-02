@@ -3,7 +3,12 @@ import { handleSlackInstall } from './install.js';
 import { handleSlackActivate } from './activate.js';
 import { handleSlackDeactivate } from './deactivate.js';
 import { slackEventsRouter } from './events.js';
-import { resolveOrgId, resolveAccountId, fetchSlackIntegration } from './shared.js';
+import {
+  resolveOrgId,
+  resolveAccountId,
+  fetchSlackIntegration,
+  fetchSlackIntegrationByTeamId,
+} from './shared.js';
 import { SlackConnectorClient } from '../client/slackClient.js';
 import { handleKbCommand } from '../commands/kb.js';
 import { handleExplainCommand } from '../commands/explain.js';
@@ -32,14 +37,28 @@ export function buildSlackApiRouter() {
   router.use(slackEventsRouter);
   router.post('/commands', express.urlencoded({ extended: true }), async (req, res) => {
     const payload = req.body as Record<string, string>;
-    const orgId = resolveOrgId(req) ?? payload.team_id;
-    const accountId = resolveAccountId(req);
+    const teamId = payload.team_id;
+    let orgId = resolveOrgId(req);
+    let accountId = resolveAccountId(req);
+
+    let integration = orgId ? await fetchSlackIntegration(orgId) : null;
+    if (!integration && teamId) {
+      integration = await fetchSlackIntegrationByTeamId(teamId);
+      if (integration) {
+        orgId = integration.org_id;
+        accountId = accountId ?? integration.account_id ?? null;
+      }
+    }
+
     if (!orgId) {
       res.status(400).json({ message: 'org_id required' });
       return;
     }
-    const integration = await fetchSlackIntegration(orgId);
-    const botToken = (integration?.data as { bot_token?: string })?.bot_token;
+    if (!integration) {
+      res.status(401).json({ message: 'Slack connector not activated' });
+      return;
+    }
+    const botToken = (integration.data as { bot_token?: string })?.bot_token;
     if (!botToken) {
       res.status(401).json({ message: 'Slack connector not activated' });
       return;
@@ -51,7 +70,17 @@ export function buildSlackApiRouter() {
     const user = payload.user_id ?? '';
     const threadTs = payload.thread_ts;
 
-    const ctx = { orgId, accountId: accountId ?? undefined, channel, user, text, threadTs, slackClient };
+    const ctx = {
+      orgId,
+      accountId: accountId ?? undefined,
+      channel,
+      user,
+      text,
+      threadTs,
+      slackClient,
+      teamId,
+      eventType: 'slash_command',
+    };
     if (command.includes('kb')) await handleKbCommand(ctx);
     else if (command.includes('explain')) await handleExplainCommand(ctx);
     else if (command.includes('compare')) await handleCompareCommand(ctx);

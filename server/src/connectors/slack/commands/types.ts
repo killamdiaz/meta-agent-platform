@@ -8,4 +8,6 @@ export interface SlackCommandContext {
   text: string;
   threadTs?: string;
   slackClient: SlackConnectorClient;
+  teamId?: string;
+  eventType: string;
 }

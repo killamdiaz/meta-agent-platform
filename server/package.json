@@ -22,6 +22,7 @@
     "openai": "4.47.3",
     "pg": "8.11.5",
     "playwright-core": "^1.43.1",
+    "prom-client": "^15.1.0",
     "zod": "3.22.4"
   },
   "devDependencies": {

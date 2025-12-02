@@ -13,6 +13,8 @@ export interface SlackEventContext {
   orgId: string;
   accountId?: string;
   slackClient: SlackConnectorClient;
+  teamId?: string;
+  eventType: string;
 }
 
 export interface AppMentionEvent {
@@ -33,6 +35,8 @@ export async function handleAppMention(event: AppMentionEvent, ctx: SlackEventCo
     text,
     threadTs: event.thread_ts,
     slackClient: ctx.slackClient,
+    teamId: ctx.teamId,
+    eventType: ctx.eventType,
   };
 
   switch (intent) {
@@ -61,6 +65,12 @@ export async function handleAppMention(event: AppMentionEvent, ctx: SlackEventCo
         text,
         threadTs: event.thread_ts,
         slackClient: ctx.slackClient,
+        slackMetadata: {
+          team_id: ctx.teamId,
+          user_id: event.user,
+          channel_id: event.channel,
+          event_type: ctx.eventType,
+        },
       });
       break;
   }

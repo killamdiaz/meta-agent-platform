@@ -205,6 +205,24 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_forge_token_usage_created ON forge_token_usage(created_at);
     CREATE INDEX IF NOT EXISTS idx_forge_token_usage_provider ON forge_token_usage(model_provider);
 
+    CREATE TABLE IF NOT EXISTS billing_usage (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      source TEXT NOT NULL DEFAULT 'slack',
+      team_id TEXT,
+      user_id TEXT,
+      channel_id TEXT,
+      event_type TEXT,
+      tokens_prompt INT NOT NULL DEFAULT 0,
+      tokens_completion INT NOT NULL DEFAULT 0,
+      tokens_total INT NOT NULL DEFAULT 0,
+      images_generated INT NOT NULL DEFAULT 0,
+      actions_triggered JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_source ON billing_usage(source);
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_team ON billing_usage(team_id);
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_created ON billing_usage(created_at);
+
     CREATE TABLE IF NOT EXISTS import_jobs (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       org_id UUID,

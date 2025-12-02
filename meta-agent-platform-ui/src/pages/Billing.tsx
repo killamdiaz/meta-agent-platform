@@ -27,6 +27,16 @@ function formatCurrency(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
+const COST_PRICING = {
+  aiTokensPerMillion: 30,
+  embeddingTokensPerMillion: 2,
+  vectorStoragePerGb: 3,
+  imageGen512: 0.05,
+  imageGen1024: 0.1,
+};
+
+const computeAiCost = (tokens: number) => (Number(tokens || 0) / 1_000_000) * COST_PRICING.aiTokensPerMillion;
+
 export default function Billing() {
   const { user, loading: authLoading } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? "";
@@ -76,7 +86,7 @@ export default function Billing() {
     models.forEach((m) => {
       const entry = map.get(m.model_provider) ?? { tokens: 0, cost: 0 };
       entry.tokens += Number(m.total_tokens ?? 0);
-      entry.cost += Number(m.total_cost ?? 0);
+      entry.cost += computeAiCost(m.total_tokens ?? 0);
       map.set(m.model_provider, entry);
     });
     return Array.from(map.entries()).map(([provider, totals]) => ({ provider, ...totals }));
@@ -93,6 +103,20 @@ export default function Billing() {
       return diff <= days;
     });
   }, [daily, filter]);
+
+  const windowLabel = useMemo(() => {
+    if (filter === "24h") return "Last 24 Hours";
+    if (filter === "7d") return "This Week";
+    if (filter === "30d") return "This Month";
+    return "All Time";
+  }, [filter]);
+
+  const calculatedTotalCost = useMemo(() => {
+    const aiTokens = Number(summary?.total_tokens ?? 0);
+    const aiCost = (aiTokens / 1_000_000) * COST_PRICING.aiTokensPerMillion;
+    // Embeddings, storage, and images are not yet tracked here; keep them zero until available.
+    return aiCost;
+  }, [summary]);
 
   const renderSkeletonCards = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -163,7 +187,7 @@ export default function Billing() {
           <Card>
             <CardContent className="p-6 space-y-2">
               <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                <TrendingUp className="h-4 w-4" /> This Month
+                <TrendingUp className="h-4 w-4" /> {windowLabel}
               </div>
               <div className="text-3xl font-bold">
                 {formatNumber(
@@ -179,8 +203,10 @@ export default function Billing() {
               <div className="flex items-center gap-2 text-muted-foreground text-sm">
                 <Coins className="h-4 w-4" /> Total Cost
               </div>
-              <div className="text-3xl font-bold">{formatCurrency(Number(summary.total_cost ?? 0))}</div>
-              <p className="text-xs text-muted-foreground">Includes OpenAI costs; local models are $0.</p>
+              <div className="text-3xl font-bold">{formatCurrency(calculatedTotalCost)}</div>
+              <p className="text-xs text-muted-foreground">
+                Calculated at ${COST_PRICING.aiTokensPerMillion} per 1M AI tokens; embeddings, storage, and images are 0 until tracked.
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -234,7 +260,7 @@ export default function Billing() {
                   <span className="font-medium capitalize">{provider.provider}</span>
                   <div className="text-right">
                     <div>{formatNumber(provider.tokens)} tokens</div>
-                    <div className="text-xs text-muted-foreground">{formatCurrency(provider.cost)}</div>
+                    <div className="text-xs text-muted-foreground">{formatCurrency(computeAiCost(provider.tokens))}</div>
                   </div>
                 </div>
               ))
@@ -259,7 +285,9 @@ export default function Billing() {
                   <span className="capitalize">{row.source ?? "unknown"}</span>
                   <div className="text-right">
                     <div>{formatNumber(Number(row.total_tokens ?? 0))} tokens</div>
-                    <div className="text-xs text-muted-foreground">{formatCurrency(Number(row.total_cost ?? 0))}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatCurrency(computeAiCost(Number(row.total_tokens ?? 0)))}
+                    </div>
                   </div>
                 </div>
               ))
@@ -282,7 +310,9 @@ export default function Billing() {
                   <span>{row.agent_name ?? "unknown"}</span>
                   <div className="text-right">
                     <div>{formatNumber(Number(row.total_tokens ?? 0))} tokens</div>
-                    <div className="text-xs text-muted-foreground">{formatCurrency(Number(row.total_cost ?? 0))}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatCurrency(computeAiCost(Number(row.total_tokens ?? 0)))}
+                    </div>
                   </div>
                 </div>
               ))

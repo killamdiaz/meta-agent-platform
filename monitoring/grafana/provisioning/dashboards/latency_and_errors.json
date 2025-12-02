@@ -1,0 +1,34 @@
+{
+  "title": "Latency & Errors",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Request Throughput (server)",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(requests_total[1m])" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "graph",
+      "title": "Errors",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(errors_total[1m])" }
+      ],
+      "id": 2
+    },
+    {
+      "type": "logs",
+      "title": "Error Logs",
+      "datasource": "Loki",
+      "targets": [
+        { "expr": "{level=\"error\"}" }
+      ],
+      "id": 3
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}
