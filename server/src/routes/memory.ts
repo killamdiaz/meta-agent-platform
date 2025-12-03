@@ -35,7 +35,7 @@ function mapMemoryStatus(memory: { created_at: string }): 'active' | 'new' | 'ol
 
 router.get('/graph', async (_req, res, next) => {
   try {
-    const [agentsResult, memoriesResult, tasksResult, integrationResult] = await Promise.all([
+    const [agentsResult, memoriesResult, tasksResult, integrationResult, docsResult] = await Promise.all([
       pool.query<{
         id: string;
         name: string;
@@ -91,6 +91,19 @@ router.get('/graph', async (_req, res, next) => {
           WHERE source_type = 'integration'
           ORDER BY created_at DESC
           LIMIT 50`
+      ),
+      pool.query<{
+        id: string;
+        source_id: string | null;
+        metadata: Record<string, unknown> | null;
+        content: string;
+        created_at: string;
+      }>(
+        `SELECT id, source_id, metadata, content, created_at
+           FROM forge_embeddings
+          WHERE source_type = 'crawler'
+          ORDER BY created_at DESC
+          LIMIT 200`
       )
     ]);
 
@@ -116,6 +129,23 @@ router.get('/graph', async (_req, res, next) => {
           createdAt: row.created_at,
           sourceId: row.source_id,
           color: (meta.color as string) || '#f97316',
+          ...meta
+        }
+      };
+    });
+
+    const documentNodes = docsResult.rows.map((row) => {
+      const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+      const label = (meta.title as string) || row.content || row.source_id || row.id;
+      return {
+        id: `doc-${row.id}`,
+        type: 'document',
+        label: label.length > 80 ? `${label.slice(0, 77)}...` : label,
+        status: 'active' as const,
+        metadata: {
+          createdAt: row.created_at,
+          sourceId: row.source_id,
+          color: '#a855f7',
           ...meta
         }
       };
@@ -207,9 +237,18 @@ router.get('/graph', async (_req, res, next) => {
       }))
     );
 
+    const documentLinks = documentNodes.flatMap((doc) =>
+      agentNodes.map((agent) => ({
+        source: doc.id,
+        target: agent.id,
+        relation: 'extends' as const,
+        strength: 0.4
+      }))
+    );
+
     res.json({
-      nodes: [...agentNodes, ...integrationNodes, ...memoryNodes, ...taskNodes],
-      links: [...agentLinks, ...integrationLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
+      nodes: [...agentNodes, ...integrationNodes, ...documentNodes, ...memoryNodes, ...taskNodes],
+      links: [...agentLinks, ...integrationLinks, ...documentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
     });
   } catch (error) {
     next(error);

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AutomationDrawer } from "@/components/AutomationDrawer";
 import { api, apiBaseUrl, API_BASE } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type {
   AgentRecord,
   CommandResponse,
@@ -33,6 +34,103 @@ interface Message {
   streamContent?: string;
   streamingState?: "streaming" | "complete";
 }
+
+type TicketPriority = "P1" | "P2" | "P3" | "Other" | string;
+interface JiraTicketLite {
+  id: string;
+  key: string;
+  title: string;
+  summary: string;
+  description: string;
+  status: string;
+  priority: TicketPriority;
+  assignee?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+type MockTicketPriority = "P1" | "P2" | "P3" | "P4";
+type MockTicketStatus = "open" | "in-progress" | "closed";
+interface MockTicket {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  priority: MockTicketPriority;
+  status: MockTicketStatus;
+  reporter: string;
+  createdAt: string;
+  source: string;
+}
+
+const mockTickets: MockTicket[] = [
+  {
+    id: "1",
+    key: "SUP-1",
+    title: "Atlas Issue URGENT",
+    description: "Not able to process payments. need help ASAP!",
+    priority: "P1",
+    status: "open",
+    reporter: "Zaid Mallik",
+    createdAt: "2024-12-03",
+    source: "Portal",
+  },
+  {
+    id: "2",
+    key: "SUP-2",
+    title: "Login page not loading",
+    description: "Users report blank screen on login attempt.",
+    priority: "P1",
+    status: "open",
+    reporter: "Sarah Chen",
+    createdAt: "2024-12-02",
+    source: "Email",
+  },
+  {
+    id: "3",
+    key: "SUP-3",
+    title: "Dashboard performance slow",
+    description: "Dashboard takes 10+ seconds to load.",
+    priority: "P2",
+    status: "in-progress",
+    reporter: "Mike Johnson",
+    createdAt: "2024-12-01",
+    source: "Portal",
+  },
+  {
+    id: "4",
+    key: "SUP-4",
+    title: "Export feature broken",
+    description: "CSV export returns empty file.",
+    priority: "P2",
+    status: "open",
+    reporter: "Emma Wilson",
+    createdAt: "2024-11-30",
+    source: "Slack",
+  },
+  {
+    id: "5",
+    key: "SUP-5",
+    title: "Update documentation",
+    description: "API docs need updating for v2.",
+    priority: "P3",
+    status: "open",
+    reporter: "Alex Brown",
+    createdAt: "2024-11-29",
+    source: "Portal",
+  },
+  {
+    id: "6",
+    key: "SUP-6",
+    title: "Minor UI alignment issue",
+    description: "Button spacing off on mobile.",
+    priority: "P4",
+    status: "closed",
+    reporter: "Lisa Park",
+    createdAt: "2024-11-28",
+    source: "Email",
+  },
+];
 
 const createMessageId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -315,6 +413,10 @@ export default function CommandConsole() {
   const [automationStatusMessage, setAutomationStatusMessage] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(MIN_VISIBLE_MESSAGES);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [ticketMode, setTicketMode] = useState<"chat" | "ticketView" | "ticketSolving">("chat");
+  const [tickets, setTickets] = useState<JiraTicketLite[]>([]);
+  const [selectedTicket, setSelectedTicket] = useState<JiraTicketLite | null>(null);
+  const [loadingTickets, setLoadingTickets] = useState(false);
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
   const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
   const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
@@ -981,15 +1083,66 @@ export default function CommandConsole() {
     return pendingMessage?.agentName;
   }, [messages]);
 
-  const suggestions = useMemo(() => {
-    if (agents.length === 0) {
-      return [
-        "Create an agent that monitors onboarding emails",
-        "Generate a financial summary for this week",
-      ];
+  const pendingCount = useMemo(
+    () =>
+      tickets.filter(
+        (t) => !["done", "closed", "resolved"].includes((t.status || "").toLowerCase()),
+      ).length,
+    [tickets],
+  );
+  const closedCount = useMemo(
+    () => tickets.filter((t) => ["done", "closed", "resolved"].includes((t.status || "").toLowerCase())).length,
+    [tickets],
+  );
+
+  const fetchTickets = useCallback(async () => {
+    try {
+      setLoadingTickets(true);
+      const res = await fetch(`${API_BASE}/jira/my-tickets`, {
+        headers: { Accept: "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load tickets");
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Unexpected response: ${text.slice(0, 120)}`);
+      }
+      const data: JiraTicketLite[] = await res.json();
+      setTickets(data);
+    } catch (err) {
+      console.error(err);
+      // fallback to mock tickets transformed into JiraTicketLite shape
+      const mapped = mockTickets.map<JiraTicketLite>((t) => ({
+        id: t.id,
+        key: t.key,
+        title: t.title,
+        summary: t.title,
+        description: t.description,
+        priority: t.priority,
+        status: t.status,
+        assignee: t.reporter,
+        created_at: t.createdAt,
+        updated_at: t.createdAt,
+      }));
+      setTickets(mapped);
+    } finally {
+      setLoadingTickets(false);
     }
-    return agents.slice(0, 4).map((agent) => `@${agent.name} run a status update`);
-  }, [agents]);
+  }, []);
+
+  useEffect(() => {
+    if (ticketMode === "ticketView" || ticketMode === "ticketSolving") {
+      fetchTickets();
+    }
+  }, [ticketMode, fetchTickets]);
+
+  const suggestions = useMemo(() => {
+    return [
+      `Pending Tickets: ${pendingCount}`,
+      `Closed Tickets: ${closedCount}`,
+    ];
+  }, [pendingCount, closedCount]);
 
   const showSlackCta = Boolean(!slackConnected && slackStatusData && !slackStatusLoading);
   const showJiraCta = Boolean(!jiraConnected && jiraStatusData && !jiraStatusLoading);
@@ -1300,7 +1453,7 @@ export default function CommandConsole() {
         />
       )}
       <div className="flex flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-border/60 px-6 py-4 opacity-0 hover:opacity-100 transition-opacity duration-150">
           <div className="flex items-center gap-3">
             <Button
               size="icon"
@@ -1327,199 +1480,346 @@ export default function CommandConsole() {
           </Button>
         </div>
         <div
-          className="flex-1 overflow-y-auto p-8"
+          className={ticketMode !== "chat" ? "flex-1 overflow-hidden" : "flex-1 overflow-y-auto p-8"}
           ref={scrollContainerRef}
           onScroll={handleScroll}
         >
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full space-y-6 animate-fade-in">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-8 h-8 text-atlas-glow" />
+          {ticketMode !== "chat" ? (
+            <div className="flex h-full gap-4 p-4 pt-0">
+              {/* Left chat pane */}
+              <div className="flex-[3] flex flex-col rounded-2xl border border-border/60 bg-background/70 overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                  {messages.length === 0 ? (
+                    <div className="text-sm text-neutral-300">Please select a ticket from the right panel to get started.</div>
+                  ) : (
+                    <div className="space-y-6">
+                      {displayedMessages.map((message) => (
+                        <div
+                          key={message.id}
+                          className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}
+                        >
+                          <div
+                            className={cn(
+                              "max-w-[90%] rounded-2xl px-4 py-3 whitespace-pre-wrap",
+                              message.role === "user"
+                                ? "bg-atlas-glow/20 text-foreground"
+                                : "bg-neutral-900 text-foreground border border-border/70",
+                            )}
+                          >
+                            {message.streamContent ?? message.content}
+                          </div>
+                        </div>
+                      ))}
+                      {isTyping && (
+                        <div className="flex justify-start animate-fade-in">
+                          <div className="bg-muted rounded-2xl px-4 py-3">
+                            <div className="flex gap-1">
+                              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "0ms" }} />
+                              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "150ms" }} />
+                              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "300ms" }} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* Input inside chat pane */}
+                <div className="border-t border-border/60 bg-background/80 p-4">
+                  <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[20px] hover:border-border transition-colors">
+                    <div className="flex items-center gap-3 px-5 py-3">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+                        onClick={() => setInput((value) => `${value} /create `)}
+                        aria-label="Create agent"
+                      >
+                        <Plus className="h-5 w-5" />
+                      </Button>
+                      <input
+                        type="text"
+                        value={input}
+                        onChange={handleInputChange}
+                        onKeyDown={handleKeyPress}
+                        placeholder="Ask Atlas Core or route with @agent..."
+                        className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+                        disabled={isTyping}
+                        ref={inputRef}
+                      />
+                      <button
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50"
+                        type="button"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                          />
+                        </svg>
+                        <span>Tools</span>
+                      </button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+                        aria-label="Voice input"
+                      >
+                        <Mic className="h-5 w-5" />
+                      </Button>
+                    </div>
+                    {mentionQuery !== null && (
+                      <div className="absolute left-16 right-16 bottom-full z-10 mb-2 rounded-2xl border border-border/60 bg-background/95 backdrop-blur-xl shadow-lg">
+                        {mentionCandidates.length > 0 ? (
+                          <ul className="py-2">
+                            {mentionCandidates.map((agent, index) => (
+                              <li key={agent.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    insertMention(agent);
+                                  }}
+                                  className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${
+                                    index === mentionIndex
+                                      ? "bg-muted/60 text-foreground"
+                                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                                  }`}
+                                >
+                                  <span className="font-medium text-foreground">{agent.name}</span>
+                                  <span className="text-xs uppercase tracking-wide text-muted-foreground">{agent.role}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="px-4 py-3 text-sm text-muted-foreground">No matching agents</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="text-center space-y-1">
-                <h1 className="text-4xl font-normal">
-                  <span className="text-atlas-glow">Hello, Founder</span>
-                </h1>
-                <p className="text-3xl font-normal text-muted-foreground/80">What should we build today?</p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-8 max-w-2xl">
-                {suggestions.map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    onClick={() => setInput(suggestion)}
-                    className="p-4 text-left text-sm border border-border rounded-xl hover:border-atlas-glow/50 hover:bg-muted/30 transition-all"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
+
+              {/* Right ticket drawer */}
+              <div className="flex-1 min-w-[320px] max-w-[400px] rounded-2xl border border-border/70 bg-background/70 p-4 space-y-3 overflow-y-auto">
+                <div className="text-sm text-neutral-200 flex items-center justify-between">
+                  <span>Tickets</span>
+                  {loadingTickets && <span className="text-xs text-neutral-500">Loading…</span>}
+                </div>
+                <TicketDrawerContent
+                  tickets={tickets}
+                  selectedTicket={selectedTicket}
+                  onSelectTicket={(t) => {
+                    setSelectedTicket(t);
+                    setTicketMode("ticketSolving");
+                  }}
+                  onClearSelection={() => setSelectedTicket(null)}
+                />
+                {selectedTicket && <TicketDetailCard ticket={selectedTicket} onBack={() => setSelectedTicket(null)} />}
               </div>
             </div>
           ) : (
-            <div className="max-w-3xl mx-auto space-y-8">
-              {visibleCount < messages.length && (
-                <div className="flex justify-center">
-                  <span className="text-xs text-muted-foreground">Scroll up to load previous messages…</span>
-                </div>
-              )}
-              {displayedMessages.map((message) => {
-                if (message.role === "user") {
-                  return (
-                    <div key={message.id} className="flex justify-end animate-fade-in">
-                      <div className="flex flex-col items-end space-y-2">
-                        <div className="text-xs font-medium uppercase tracking-wide text-atlas-glow">You</div>
-                        <div className="max-w-2xl rounded-2xl px-4 py-3 whitespace-pre-wrap bg-atlas-glow/20 text-foreground inline-block w-auto">
-                          {message.streamContent ?? message.content}
-                        </div>
-                      </div>
+            <>
+              <div
+                className="flex-1 overflow-y-auto p-8"
+                ref={scrollContainerRef}
+                onScroll={handleScroll}
+              >
+                {messages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full space-y-6 animate-fade-in">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-8 h-8 text-atlas-glow" />
                     </div>
-                  );
-                }
-
-                const displayValue = getDisplayValue(message);
-                if (!displayValue.trim()) {
-                  return null;
-                }
-
-                return (
-                  <div key={message.id} className="animate-fade-in space-y-2">
-                    <div
-                      className={`text-xs font-medium uppercase tracking-wide text-muted-foreground ${
-                        message.role === "system" ? "text-destructive" : ""
-                      }`}
-                    >
-                      {message.role === "assistant" ? message.agentName ?? "Atlas" : "System"}
+                    <div className="text-center space-y-1">
+                      <h1 className="text-4xl font-normal">
+                        <span className="text-atlas-glow">Hello, Founder</span>
+                      </h1>
+                      <p className="text-3xl font-normal text-muted-foreground/80">What should we build today?</p>
                     </div>
-                    <div
-                      className={`whitespace-pre-wrap leading-relaxed text-sm md:text-base ${
-                        message.role === "system" ? "text-destructive" : "text-foreground"
-                      }`}
-                    >
-                      {displayValue}
-                    </div>
-                  </div>
-                );
-              })}
-              {isTyping && (
-                <div className="animate-fade-in">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {activeAgentName ?? "Atlas"}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    {commandMutation.isPending
-                      ? "Processing command..."
-                      : activeAgentName
-                      ? `${activeAgentName} is working...`
-                      : "Processing command..."}
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+      <div className="flex items-center gap-6 mt-6">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-semibold text-red-400">{pendingCount}</span>
+          <span className="text-sm text-muted-foreground">Pending tickets</span>
         </div>
-
-        <div className="bg-background p-6">
-          <div className="max-w-4xl mx-auto space-y-4">
-            {awaitingKey && (
-              <div className="rounded-2xl border border-border/60 bg-card/60 p-4 backdrop-blur-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-atlas-glow">
-                      Secure credential required {awaitingKey.agent ? `(${awaitingKey.agent})` : ""}
-                    </div>
-                    <p className="mt-2 text-sm text-muted-foreground">{awaitingKey.prompt}</p>
+        <div className="w-px h-6 bg-border" />
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-semibold text-blue-400">{closedCount}</span>
+          <span className="text-sm text-muted-foreground">Closed tickets</span>
+        </div>
+      </div>
                   </div>
-                </div>
-                <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleSubmitAutomationKey}>
-                  <Input
-                    type="password"
-                    value={automationKeyInput}
-                    onChange={(event) => setAutomationKeyInput(event.target.value)}
-                    placeholder="Paste credential securely"
-                    className="flex-1"
-                    required
-                  />
-                  <Button type="submit" className="sm:w-auto">
-                    Submit
-                  </Button>
-                </form>
-              </div>
-            )}
-            <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[28px] hover:border-border transition-colors">
-              <div className="flex items-center gap-3 px-5 py-4">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
-                  onClick={() => setInput((value) => `${value} /create `)}
-                  aria-label="Create agent"
-                >
-                  <Plus className="h-5 w-5" />
-                </Button>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={handleInputChange}
-                  onKeyDown={handleKeyPress}
-                  placeholder="Ask Atlas Core or route with @agent..."
-                  className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
-                  disabled={isTyping}
-                  ref={inputRef}
-                />
-                <button
-                  className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50"
-                  type="button"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
-                    />
-                  </svg>
-                  <span>Tools</span>
-                </button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
-                  aria-label="Voice input"
-                >
-                  <Mic className="h-5 w-5" />
-                </Button>
-              </div>
-              {mentionQuery !== null && (
-                <div className="absolute left-16 right-16 bottom-full z-10 mb-2 rounded-2xl border border-border/60 bg-background/95 backdrop-blur-xl shadow-lg">
-                  {mentionCandidates.length > 0 ? (
-                    <ul className="py-2">
-                      {mentionCandidates.map((agent, index) => (
-                        <li key={agent.id}>
-                          <button
-                            type="button"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              insertMention(agent);
-                            }}
-                            className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${
-                              index === mentionIndex
-                                ? "bg-muted/60 text-foreground"
-                                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                ) : (
+                  <div className="max-w-3xl mx-auto space-y-8">
+                    {visibleCount < messages.length && (
+                      <div className="flex justify-center">
+                        <span className="text-xs text-muted-foreground">Scroll up to load previous messages…</span>
+                      </div>
+                    )}
+                    {displayedMessages.map((message) => {
+                      if (message.role === "user") {
+                        return (
+                          <div key={message.id} className="flex justify-end animate-fade-in">
+                            <div className="flex flex-col items-end space-y-2">
+                              <div className="text-xs font-medium uppercase tracking-wide text-atlas-glow">You</div>
+                              <div className="max-w-2xl rounded-2xl px-4 py-3 whitespace-pre-wrap bg-atlas-glow/20 text-foreground inline-block w-auto">
+                                {message.streamContent ?? message.content}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const displayValue = getDisplayValue(message);
+                      if (!displayValue.trim()) {
+                        return null;
+                      }
+
+                      return (
+                        <div key={message.id} className="animate-fade-in space-y-2">
+                          <div
+                            className={`text-xs font-medium uppercase tracking-wide text-muted-foreground ${
+                              message.role === "system" ? "text-destructive" : ""
                             }`}
                           >
-                            <span className="font-medium text-foreground">{agent.name}</span>
-                            <span className="text-xs uppercase tracking-wide text-muted-foreground">{agent.role}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="px-4 py-3 text-sm text-muted-foreground">No matching agents</div>
+                            {message.role === "assistant" ? message.agentName ?? "Atlas" : "System"}
+                          </div>
+                          <div
+                            className={`whitespace-pre-wrap leading-relaxed text-sm md:text-base ${
+                              message.role === "system" ? "text-destructive" : "text-foreground"
+                            }`}
+                          >
+                            {displayValue}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {isTyping && (
+                      <div className="animate-fade-in">
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          {activeAgentName ?? "Atlas"}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          {commandMutation.isPending
+                            ? "Processing command..."
+                            : activeAgentName
+                            ? `${activeAgentName} is working...`
+                            : "Processing command..."}
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-background p-6">
+                <div className="max-w-4xl mx-auto space-y-4">
+                  {awaitingKey && (
+                    <div className="rounded-2xl border border-border/60 bg-card/60 p-4 backdrop-blur-sm">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-atlas-glow">
+                            Secure credential required {awaitingKey.agent ? `(${awaitingKey.agent})` : ""}
+                          </div>
+                          <p className="mt-2 text-sm text-muted-foreground">{awaitingKey.prompt}</p>
+                        </div>
+                      </div>
+                      <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleSubmitAutomationKey}>
+                        <Input
+                          type="password"
+                          value={automationKeyInput}
+                          onChange={(event) => setAutomationKeyInput(event.target.value)}
+                          placeholder="Paste credential securely"
+                          className="flex-1"
+                          required
+                        />
+                        <Button type="submit" className="sm:w-auto">
+                          Submit
+                        </Button>
+                      </form>
+                    </div>
                   )}
+                  <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[28px] hover:border-border transition-colors">
+                    <div className="flex items-center gap-3 px-5 py-4">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+                        onClick={() => setInput((value) => `${value} /create `)}
+                        aria-label="Create agent"
+                      >
+                        <Plus className="h-5 w-5" />
+                      </Button>
+                      <input
+                        type="text"
+                        value={input}
+                        onChange={handleInputChange}
+                        onKeyDown={handleKeyPress}
+                        placeholder="Ask Atlas Core or route with @agent..."
+                        className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+                        disabled={isTyping}
+                        ref={inputRef}
+                      />
+                      <button
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50"
+                        type="button"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                          />
+                        </svg>
+                        <span>Tools</span>
+                      </button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+                        aria-label="Voice input"
+                      >
+                        <Mic className="h-5 w-5" />
+                      </Button>
+                    </div>
+                    {mentionQuery !== null && (
+                      <div className="absolute left-16 right-16 bottom-full z-10 mb-2 rounded-2xl border border-border/60 bg-background/95 backdrop-blur-xl shadow-lg">
+                        {mentionCandidates.length > 0 ? (
+                          <ul className="py-2">
+                            {mentionCandidates.map((agent, index) => (
+                              <li key={agent.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    insertMention(agent);
+                                  }}
+                                  className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${
+                                    index === mentionIndex
+                                      ? "bg-muted/60 text-foreground"
+                                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                                  }`}
+                                >
+                                  <span className="font-medium text-foreground">{agent.name}</span>
+                                  <span className="text-xs uppercase tracking-wide text-muted-foreground">{agent.role}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="px-4 py-3 text-sm text-muted-foreground">No matching agents</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
       {showSlackCta && (
@@ -1546,6 +1846,196 @@ export default function CommandConsole() {
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ----- Ticket drawer components (inline, Jira-like UI) -----
+function TicketDrawerContent({
+  tickets,
+  selectedTicket,
+  onSelectTicket,
+  onClearSelection,
+}: {
+  tickets: JiraTicketLite[];
+  selectedTicket: JiraTicketLite | null;
+  onSelectTicket: (t: JiraTicketLite) => void;
+  onClearSelection: () => void;
+}) {
+  const grouped = tickets.reduce<Record<string, JiraTicketLite[]>>((acc, t) => {
+    const key = ["P1", "P2", "P3"].includes(t.priority) ? t.priority : "Other";
+    acc[key] = acc[key] || [];
+    acc[key].push(t);
+    return acc;
+  }, {});
+  const priorities = ["P1", "P2", "P3", "Other"];
+
+  return (
+    <div className="space-y-6">
+      {priorities.map((prio) => {
+        const list = grouped[prio];
+        if (!list?.length) return null;
+        return (
+          <div key={prio}>
+            <div className="flex items-center gap-2 mb-3">
+              <span
+                className={cn(
+                  "text-xs font-medium px-2 py-0.5 rounded border",
+                  prio === "P1"
+                    ? "bg-red-500/20 text-red-400 border-red-500/30"
+                    : prio === "P2"
+                    ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
+                    : prio === "P3"
+                    ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                    : "bg-neutral-500/20 text-neutral-200 border-neutral-500/30",
+                )}
+              >
+                {prio}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {list.length} ticket{list.length > 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="space-y-2">
+              {list.map((ticket) => (
+                <button
+                  key={ticket.id}
+                  onClick={() => onSelectTicket(ticket)}
+                  className={cn(
+                    "w-full text-left p-3 rounded-lg border transition-all",
+                    selectedTicket?.id === ticket.id
+                      ? "bg-atlas-glow/10 border-atlas-glow/50"
+                      : "bg-card/50 border-border/50 hover:border-border hover:bg-card/80",
+                  )}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs text-muted-foreground">{ticket.key}</span>
+                    <span
+                      className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded",
+                        (ticket.status || "").toLowerCase() === "open"
+                          ? "bg-blue-500/20 text-blue-400"
+                          : (ticket.status || "").toLowerCase() === "in-progress"
+                          ? "bg-yellow-500/20 text-yellow-400"
+                          : "bg-green-500/20 text-green-400",
+                      )}
+                    >
+                      {ticket.status}
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium text-foreground line-clamp-1">{ticket.title || ticket.summary}</p>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{ticket.description || ticket.summary}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TicketDetailCard({ ticket, onBack }: { ticket: JiraTicketLite; onBack: () => void }) {
+  const [activeTab, setActiveTab] = useState<"All" | "Comments" | "History" | "Work log" | "Approvals">("Comments");
+  const tabs = ["All", "Comments", "History", "Work log", "Approvals"] as const;
+
+  return (
+    <div className="flex flex-col h-full bg-card/30 border border-border/50 rounded-2xl p-4">
+      <div className="flex items-center gap-3 mb-4">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="text-xs">←</span>
+          Back
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="bg-blue-500/20 text-blue-400 text-xs px-2 py-0.5 rounded">{ticket.key}</span>
+        </div>
+        <div className="flex items-center gap-1 ml-auto text-muted-foreground text-xs">
+          <span className="w-6 h-6 rounded-md border border-border flex items-center justify-center">△</span>
+          <span className="w-6 h-6 rounded-md border border-border flex items-center justify-center">▽</span>
+        </div>
+      </div>
+
+      <h2 className="text-lg font-semibold text-foreground mb-4">{ticket.title || ticket.summary}</h2>
+
+      <div className="flex items-center gap-2 mb-6">
+        <Button variant="outline" size="sm" className="text-xs h-8">
+          Create subtask
+        </Button>
+        <Button variant="outline" size="sm" className="text-xs h-8">
+          Link work item
+        </Button>
+        <Button variant="outline" size="sm" className="text-xs h-8">
+          Create
+        </Button>
+      </div>
+
+      <div className="bg-card/50 border border-border/50 rounded-lg p-4 mb-4">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-xs font-medium text-white">
+              {(ticket.assignee || "AI").slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <p className="text-sm">
+                <span className="font-medium text-foreground">{ticket.assignee || "Requester"}</span>
+                <span className="text-muted-foreground"> raised this request via </span>
+                <span className="font-medium text-foreground">Portal</span>
+              </p>
+              <button className="text-xs text-atlas-glow hover:underline">View request in portal</button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 pt-4 border-t border-border/50">
+          <p className="text-sm text-muted-foreground mb-1">Description</p>
+          <p className="text-sm text-foreground">{ticket.description || ticket.summary}</p>
+        </div>
+      </div>
+
+      <div className="bg-card/50 border border-border/50 rounded-lg p-4 mb-6">
+        <button className="w-full flex items-center justify-between text-sm">
+          <span className="font-medium text-foreground">Similar requests</span>
+          <span className="text-muted-foreground">▾</span>
+        </button>
+      </div>
+
+      <div className="flex-1">
+        <h3 className="text-sm font-medium text-foreground mb-3">Activity</h3>
+        <div className="flex items-center gap-1 mb-4">
+          {tabs.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "px-3 py-1.5 text-xs rounded-md transition-colors",
+                activeTab === tab ? "bg-atlas-glow/20 text-atlas-glow" : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+              )}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 bg-card/50 border border-border/50 rounded-lg p-3">
+          <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-xs font-medium text-white">
+            ZM
+          </div>
+          <div className="flex-1 flex items-center gap-2">
+            <button className="text-xs text-atlas-glow hover:underline">Add internal note</button>
+            <span className="text-muted-foreground">/</span>
+            <button className="text-xs text-atlas-glow hover:underline">Reply to customer</button>
+          </div>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground">
+            📎
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          <span className="font-medium">Pro tip:</span>{" "}
+          <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px]">M</kbd> to comment
+        </p>
+      </div>
     </div>
   );
 }

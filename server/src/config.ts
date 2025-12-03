@@ -34,5 +34,6 @@ export const config = {
   modelRouterUrl: process.env.MODEL_ROUTER_URL || '',
   crawlAdditionalPaths: process.env.CRAWL_ADDITIONAL_PATHS || '',
   crawlMaxPages: Number(process.env.CRAWL_MAX_PAGES || 50),
-  licenseSecret: process.env.LICENSE_SECRET || 'dev-license-secret'
+  licenseSecret: process.env.LICENSE_SECRET || 'dev-license-secret',
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000').split(',')
 };

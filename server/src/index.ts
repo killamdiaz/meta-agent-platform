@@ -14,6 +14,7 @@ import insightsRoute from './routes/insights.js';
 import memoryRoute from './routes/memory.js';
 import metaControllerRoute from './routes/metaController.js';
 import multiAgentRoute from './routes/multiAgent.js';
+import chatRoute from './routes/chat.js';
 import { metaController } from './core/MetaController.js';
 import automationsRoute from './routes/automations.js';
 import { toolRuntime } from './multiAgent/ToolRuntime.js';
@@ -36,7 +37,12 @@ async function bootstrap() {
   await initDb();
   const app = express();
 
-  app.use(cors());
+  app.use(
+    cors({
+      origin: config.allowedOrigins,
+      credentials: true,
+    }),
+  );
   app.use(express.json());
 
   app.use((req, _res, next) => {
@@ -63,6 +69,7 @@ async function bootstrap() {
   app.use('/memory', memoryRoute);
   app.use('/meta-controller', metaControllerRoute);
   app.use('/multi-agent', multiAgentRoute);
+  app.use('/chat', chatRoute);
   app.use('/automations', automationsRoute);
   app.use('/automation-builder', automationBuilderRoute);
   app.use('/connectors', connectorsRoute);
