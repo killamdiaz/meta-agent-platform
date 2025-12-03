@@ -2,9 +2,21 @@ import os
 import json
 import logging
 import psycopg2
+from psycopg2.extensions import AsIs
 from psycopg2.extras import RealDictCursor
 
 logger = logging.getLogger(__name__)
+
+
+class PgVector:
+    """Lightweight adapter to send Python lists to pgvector without stringifying at call sites."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __conform__(self, proto):
+        # Format as '[1,2,3]' for pgvector consumption
+        return AsIs("'" + "[" + ",".join(f"{float(x)}" for x in self.values) + "]" + "'")
 
 
 def build_dsn():
@@ -65,7 +77,6 @@ def update_job(conn, job_id, **fields):
 
 def insert_embedding(conn, org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope="org"):
     try:
-        vector_str = f"[{','.join(f'{x:.8f}' for x in embedding)}]"
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -79,7 +90,7 @@ def insert_embedding(conn, org_id, account_id, source_type, source_id, content, 
                     source_type,
                     source_id,
                     content,
-                    vector_str,
+                    PgVector(embedding),
                     json.dumps(metadata or {}),
                     visibility_scope,
                 ],
