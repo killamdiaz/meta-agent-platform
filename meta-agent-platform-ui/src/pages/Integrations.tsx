@@ -97,6 +97,7 @@ const integrationCards: IntegrationCard[] = [
 export default function Integrations() {
   const { user } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
+  const accountId = user?.id ?? null;
   const [loading, setLoading] = useState<string | null>(null);
   const [slackStatus, setSlackStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
   const [jiraStatus, setJiraStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
@@ -108,7 +109,7 @@ export default function Integrations() {
       try {
         const status = await api.fetchSlackIntegrationStatus(orgId ?? undefined);
         setSlackStatus((status.status as 'active' | 'inactive') ?? 'inactive');
-        const jira = await api.fetchJiraIntegrationStatus(orgId ?? undefined);
+        const jira = await api.fetchJiraIntegrationStatus(orgId ?? undefined, accountId ?? undefined);
         setJiraStatus((jira.status as 'active' | 'inactive') ?? 'inactive');
       } catch (error) {
         console.warn('[integrations] slack status lookup failed', error);
@@ -119,13 +120,24 @@ export default function Integrations() {
       }
     };
     fetchStatus();
-  }, [orgId]);
+  }, [accountId, orgId]);
 
   const handleIntegrationClick = async (integration: IntegrationCard) => {
     if (integration.comingSoon) {
       toast.info("This integration is coming soon!");
       return;
     }
+    const licenseKey = typeof window !== "undefined" ? localStorage.getItem("forge_license_key") : null;
+    const appendLicense = (url: string) => {
+      if (!licenseKey) return url;
+      const hasQuery = url.includes("?");
+      return `${url}${hasQuery ? "&" : "?"}license_key=${encodeURIComponent(licenseKey)}`;
+    };
+    const isSlack = integration.id === "slack";
+    const isJira = integration.id === "jira";
+    const slackConnected = isSlack && slackStatus === "active";
+    const jiraConnected = isJira && jiraStatus === "active";
+    const action = slackConnected || jiraConnected ? "disconnect" : "clicked";
 
     setLoading(integration.id);
 
@@ -133,17 +145,28 @@ export default function Integrations() {
       await supabase.from("integration_logs").insert({
         profile_id: user?.id,
         integration: integration.id,
-        action: "clicked",
+        action,
       });
 
-      if (integration.id === "okta-saml") {
+      if (isSlack && slackConnected) {
+        await api.disconnectSlackIntegration(orgId ?? undefined);
+        setSlackStatus("inactive");
+        toast.success("Slack disconnected");
+      } else if (isJira && jiraConnected) {
+        await api.disconnectJiraIntegration(orgId ?? undefined, accountId ?? undefined);
+        setJiraStatus("inactive");
+        toast.success("Jira disconnected");
+      } else if (integration.id === "okta-saml") {
         window.location.href = "/settings/saml";
       } else if (integration.id === "slack") {
         const orgQuery = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
-        window.location.href = `${API_BASE}/connectors/slack/api/install${orgQuery}`;
+        window.location.href = appendLicense(`${API_BASE}/connectors/slack/api/install${orgQuery}`);
       } else if (integration.id === "jira") {
-        const orgQuery = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
-        window.location.href = `${API_BASE}/connectors/jira/api/install${orgQuery}`;
+        const params = new URLSearchParams();
+        if (orgId) params.set("org_id", orgId);
+        if (accountId) params.set("account_id", accountId);
+        const query = params.toString();
+        window.location.href = appendLicense(`${API_BASE}/connectors/jira/api/install${query ? `?${query}` : ""}`);
       } else if (integration.id === "github") {
         window.location.href = "/oauth/github";
       } else {
@@ -219,11 +242,7 @@ export default function Integrations() {
 
                 <Button
                   variant={integration.comingSoon ? "secondary" : "outline"}
-                  disabled={
-                    isLoading ||
-                    integration.comingSoon ||
-                    ((isConnected || jiraConnected) && !statusLoading)
-                  }
+                  disabled={isLoading || integration.comingSoon || statusLoading}
                   className="w-full"
                   onClick={() => handleIntegrationClick(integration)}
                 >
@@ -233,7 +252,7 @@ export default function Integrations() {
                       Loading...
                     </>
                   ) : (
-                    isConnected && !statusLoading ? "Connected" : integration.actionText
+                    (isConnected || jiraConnected) ? "Disconnect" : integration.actionText
                   )}
                 </Button>
               </CardContent>

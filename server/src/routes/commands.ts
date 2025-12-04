@@ -216,15 +216,19 @@ router.post('/', async (req, res, next) => {
           return;
         }
         const orgId = resolveOrgId(req);
+        const accountId = resolveAccountId(req);
         if (!orgId) {
           res.status(400).json({ message: 'org_id is required to query Jira data' });
+          return;
+        }
+        if (!accountId) {
+          res.status(400).json({ message: 'forge_user_id is required to query Jira data' });
           return;
         }
         const collectedIssues: any[] = [];
         // Try to refresh context from Jira before answering
         try {
-          const client = await JiraClient.fromOrg(orgId);
-          const accountId = resolveAccountId(req);
+          const client = await JiraClient.fromUser(orgId, accountId);
           const lower = question.toLowerCase();
 
           // Projects: always ingest latest list to support breakdown questions

@@ -1,45 +1,64 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import { refreshJiraToken, getJiraToken } from './storage.js';
+import { refreshJiraToken, fetchUserJiraTokens } from './storage.js';
 
 export interface JiraClientOptions {
-  orgId: string;
   cloudId: string;
   accessToken: string;
+  jiraDomain?: string | null;
 }
 
 const BASE_URL = 'https://api.atlassian.com/ex/jira';
 
 export class JiraClient {
   private client: AxiosInstance;
-  private orgId: string;
   private cloudId: string;
+  private jiraDomain?: string | null;
 
-  constructor(options: JiraClientOptions) {
-    this.orgId = options.orgId;
-    this.cloudId = options.cloudId;
+  constructor({ accessToken, cloudId, jiraDomain }: JiraClientOptions & { accessToken: string }) {
+    this.cloudId = cloudId;
+    this.jiraDomain = jiraDomain;
+    let baseURL = `${BASE_URL}/${cloudId}`;
+    if (baseURL.includes('api.atlassian.com/jira/')) {
+      console.warn('[JiraClient] Normalizing baseURL to ex/jira', baseURL);
+      baseURL = baseURL.replace('api.atlassian.com/jira/', 'api.atlassian.com/ex/jira/');
+    }
+    // Safety: collapse accidental double jira/ prefix
+    baseURL = baseURL.replace('/jira/jira/', '/jira/');
     this.client = axios.create({
-      baseURL: `${BASE_URL}/${options.cloudId}`,
+      baseURL,
       headers: {
-        Authorization: `Bearer ${options.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json'
       }
     });
   }
 
-  static async fromOrg(orgId: string) {
-    const token = await getJiraToken(orgId);
-    if (!token || !token.cloud_id) throw new Error('Jira not connected for this org');
+  static async fromUser(orgId: string, forgeUserId: string) {
+    const token = await fetchUserJiraTokens(orgId, forgeUserId);
+    if (!token || !token.cloud_id) throw new Error('Jira not connected for this user');
     const now = Date.now();
-    const shouldRefresh = !token.expires_at || token.expires_at.getTime() - now < 5 * 60 * 1000;
-    let activeToken = token;
+    const expiresAt = token.expires_at instanceof Date ? token.expires_at.getTime() : new Date(token.expires_at).getTime();
+    const shouldRefresh = !expiresAt || expiresAt - now < 5 * 60 * 1000;
+    let activeToken: any = token;
     if (shouldRefresh) {
-      const refreshed = await refreshJiraToken(orgId);
+      const refreshed = await refreshJiraToken(orgId, forgeUserId);
       if (refreshed) activeToken = refreshed;
     }
     return new JiraClient({
-      orgId,
       cloudId: activeToken.cloud_id!,
-      accessToken: activeToken.access_token
+      accessToken: activeToken.access_token,
+      jiraDomain: activeToken.jira_domain ?? null
+    });
+  }
+
+  static async fromTokens(tokens: any) {
+    if (!tokens?.access_token || !tokens?.cloud_id) {
+      throw new Error('Missing Jira access_token or cloud_id');
+    }
+    return new JiraClient({
+      accessToken: tokens.access_token,
+      cloudId: tokens.cloud_id,
+      jiraDomain: tokens.jira_domain ?? null
     });
   }
 
@@ -54,6 +73,12 @@ export class JiraClient {
       } catch (error: any) {
         lastError = error;
         const status = error?.response?.status;
+        if (status === 410) {
+          console.warn('[JiraClient] 410 Gone response', {
+            url: error?.config?.url || config.url,
+            data: error?.response?.data,
+          });
+        }
         if (status === 429 || status >= 500) {
           const delay = 500 * Math.pow(2, attempt);
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -76,24 +101,55 @@ export class JiraClient {
   }
 
   // Issues
-  getAssignedIssues(accountId?: string) {
-    const jql = accountId ? `assignee=${accountId} AND resolution=Unresolved` : 'assignee=currentUser() AND resolution=Unresolved';
-    return this.searchIssues({ jql });
-  }
+getAssignedIssues(accountId?: string) {
+  const jql = accountId
+    ? `assignee = "${accountId}" ORDER BY updated DESC`
+    : `assignee = currentUser() ORDER BY updated DESC`;
 
-  searchIssues(params: { jql?: string; query?: string; status?: string; assignee?: string }) {
-    const clauses: string[] = [];
-    if (params.jql) clauses.push(params.jql);
-    if (params.query) clauses.push(`text ~ "${params.query}"`);
-    if (params.status) clauses.push(`status = "${params.status}"`);
-    if (params.assignee) clauses.push(`assignee = "${params.assignee}"`);
-    const jql = clauses.length ? clauses.join(' AND ') : 'ORDER BY updated DESC';
-    return this.request<{ issues: any[] }>({
-      url: '/rest/api/3/search',
-      method: 'POST',
-      data: { jql, expand: ['changelog', 'renderedFields'] }
-    });
-  }
+  return this.request<{ issues: any[] }>({
+    url: '/rest/api/3/search/jql',
+    method: 'POST',
+    data: {
+      jql,
+      maxResults: 250,
+      fields: [
+        "summary",
+        "status",
+        "priority",
+        "assignee",
+        "created",
+        "updated"
+      ]
+    }
+  });
+}
+
+searchIssues(params: { jql?: string; query?: string; status?: string; assignee?: string }) {
+  const clauses: string[] = [];
+  if (params.jql) clauses.push(params.jql);
+  if (params.query) clauses.push(`text ~ "${params.query}"`);
+  if (params.status) clauses.push(`status = "${params.status}"`);
+  if (params.assignee) clauses.push(`assignee = "${params.assignee}"`);
+
+  const jql = clauses.length ? clauses.join(' AND ') : 'ORDER BY updated DESC';
+
+  return this.request<{ issues: any[] }>({
+    url: '/rest/api/3/search/jql',
+    method: 'POST',
+    data: {
+      jql,
+      maxResults: 250,
+      fields: [
+        "summary",
+        "status",
+        "priority",
+        "assignee",
+        "created",
+        "updated"
+      ]
+    }
+  });
+}
 
   getIssue(issueKey: string) {
     return this.request<any>({

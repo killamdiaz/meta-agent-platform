@@ -28,7 +28,7 @@ export const config = {
   jiraRedirectUrl: process.env.JIRA_REDIRECT_URL || '',
   jiraScopes:
     process.env.JIRA_SCOPES ||
-    'read:jira-work read:jira-user read:jira-project write:jira-work manage:jira-webhook offline_access',
+    'read:jira-work read:jira-user read:jira-project write:jira-work manage:jira-webhook offline_access read:me',
   defaultOrgId: process.env.DEFAULT_ORG_ID || '',
   defaultAccountId: process.env.DEFAULT_ACCOUNT_ID || '',
   modelRouterUrl: process.env.MODEL_ROUTER_URL || '',

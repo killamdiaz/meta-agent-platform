@@ -4,7 +4,8 @@ import { config } from '../../config.js';
 
 export interface JiraTokenRecord {
   org_id: string;
-  account_id?: string | null;
+  forge_user_id: string;
+  jira_user_id?: string | null;
   jira_domain?: string | null;
   cloud_id?: string | null;
   access_token: string;
@@ -19,10 +20,10 @@ const ATLASSIAN_RESOURCES_URL = 'https://api.atlassian.com/oauth/token/accessibl
 export async function upsertJiraToken(record: JiraTokenRecord) {
   await pool.query(
     `
-    INSERT INTO forge_jira_tokens (org_id, account_id, jira_domain, cloud_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-    ON CONFLICT (org_id) DO UPDATE
-      SET account_id = EXCLUDED.account_id,
+    INSERT INTO forge_jira_tokens (org_id, account_id, jira_user_id, jira_domain, cloud_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+    ON CONFLICT (org_id, account_id) DO UPDATE
+      SET jira_user_id = EXCLUDED.jira_user_id,
           jira_domain = EXCLUDED.jira_domain,
           cloud_id = EXCLUDED.cloud_id,
           access_token = EXCLUDED.access_token,
@@ -33,7 +34,8 @@ export async function upsertJiraToken(record: JiraTokenRecord) {
     `,
     [
       record.org_id,
-      record.account_id ?? null,
+      record.forge_user_id ?? null,
+      record.jira_user_id ?? null,
       record.jira_domain ?? null,
       record.cloud_id ?? null,
       record.access_token,
@@ -44,16 +46,17 @@ export async function upsertJiraToken(record: JiraTokenRecord) {
   );
 }
 
-export async function getJiraToken(orgId: string): Promise<JiraTokenRecord | null> {
+export async function getJiraToken(orgId: string, forgeUserId: string): Promise<JiraTokenRecord | null> {
   const { rows } = await pool.query(
-    `SELECT org_id, account_id, jira_domain, cloud_id, access_token, refresh_token, expires_at, scopes FROM forge_jira_tokens WHERE org_id = $1 LIMIT 1`,
-    [orgId]
+    `SELECT org_id, account_id as forge_user_id, jira_user_id, jira_domain, cloud_id, access_token, refresh_token, expires_at, scopes FROM forge_jira_tokens WHERE org_id = $1 AND account_id = $2 LIMIT 1`,
+    [orgId, forgeUserId]
   );
   if (!rows[0]) return null;
   const row = rows[0];
   return {
     org_id: row.org_id,
-    account_id: row.account_id,
+    forge_user_id: row.forge_user_id,
+    jira_user_id: row.jira_user_id,
     jira_domain: row.jira_domain,
     cloud_id: row.cloud_id,
     access_token: row.access_token,
@@ -63,8 +66,8 @@ export async function getJiraToken(orgId: string): Promise<JiraTokenRecord | nul
   };
 }
 
-export async function refreshJiraToken(orgId: string): Promise<JiraTokenRecord | null> {
-  const existing = await getJiraToken(orgId);
+export async function refreshJiraToken(orgId: string, forgeUserId: string): Promise<JiraTokenRecord | null> {
+  const existing = await getJiraToken(orgId, forgeUserId);
   if (!existing) return null;
 
   const payload = {
@@ -96,4 +99,17 @@ export async function fetchAccessibleResources(accessToken: string) {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   return data as Array<{ id: string; name: string; url: string; scopes: string[] }>;
+}
+
+export async function fetchUserJiraTokens(orgId: string, forgeUserId: string) {
+  const { rows } = await pool.query(
+    `
+    SELECT *
+    FROM forge_jira_tokens
+    WHERE org_id = $1 AND account_id = $2
+    LIMIT 1
+    `,
+    [orgId, forgeUserId]
+  );
+  return rows[0] ?? null;
 }

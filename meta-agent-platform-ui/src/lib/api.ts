@@ -292,9 +292,25 @@ export const api = {
     return request(`/connectors/slack/api/status${query}`);
   },
 
-  fetchJiraIntegrationStatus(orgId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+  fetchJiraIntegrationStatus(orgId?: string, accountId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+    const params = new URLSearchParams();
+    if (orgId) params.set('org_id', orgId);
+    if (accountId) params.set('account_id', accountId);
+    const query = params.toString();
+    return request(`/connectors/jira/api/status${query ? `?${query}` : ''}`);
+  },
+
+  disconnectSlackIntegration(orgId?: string): Promise<{ status: string }> {
     const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
-    return request(`/connectors/jira/api/status${query}`);
+    return request(`/connectors/slack/api/deactivate${query}`, { method: 'POST' });
+  },
+
+  disconnectJiraIntegration(orgId?: string, accountId?: string): Promise<{ status: string }> {
+    const params = new URLSearchParams();
+    if (orgId) params.set('org_id', orgId);
+    if (accountId) params.set('account_id', accountId);
+    const query = params.toString();
+    return request(`/connectors/jira/api/disconnect${query ? `?${query}` : ''}`, { method: 'POST' });
   },
 
   fetchUsageSummary(orgId: string) {

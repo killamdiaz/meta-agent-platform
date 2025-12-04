@@ -20,7 +20,7 @@ REQUEST_LATENCY = Histogram("api_request_latency_seconds", "Latency of API reque
 app = FastAPI(title="Cortex Runtime API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

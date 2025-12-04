@@ -139,8 +139,10 @@ export async function initDb() {
       scopes TEXT[] DEFAULT '{}',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE(org_id)
+      UNIQUE(org_id, account_id)
     );
+    ALTER TABLE forge_jira_tokens DROP CONSTRAINT IF EXISTS forge_jira_tokens_org_id_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_forge_jira_tokens_org_account ON forge_jira_tokens(org_id, account_id);
     CREATE INDEX IF NOT EXISTS idx_forge_jira_tokens_org ON forge_jira_tokens(org_id);
 
     CREATE TABLE IF NOT EXISTS forge_integrations (
