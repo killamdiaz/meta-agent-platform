@@ -8,6 +8,7 @@ export type Ticket = {
   reporter: string;
   createdAt: string;
   source: string;
+  comments?: Array<{ author?: string; body?: string; created?: string }>;
 };
 
 export const mockTickets: Ticket[] = [

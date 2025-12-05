@@ -8,6 +8,7 @@ import { fetchAccessibleResources, upsertJiraToken, refreshJiraToken, fetchUserJ
 import { ingestJiraIssue, recordIntegrationNode } from '../../integrationNodes.js';
 import { pool } from '../../../db.js';
 import { Blob } from 'buffer';
+import { normalizeJiraIssue } from '../normalize.js';
 
 const router = express.Router();
 
@@ -201,7 +202,7 @@ router.get('/projects', async (req, res) => {
     if (!tokens?.access_token || !tokens?.cloud_id) {
       return res.status(404).json({ message: 'No Jira connection found for this user' });
     }
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const projects = await client.getProjects();
     res.json(projects);
   } catch (error: any) {
@@ -218,7 +219,7 @@ router.get('/projects/:id', async (req, res) => {
     if (!tokens?.access_token || !tokens?.cloud_id) {
       return res.status(404).json({ message: 'No Jira connection found for this user' });
     }
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const project = await client.getProject(req.params.id);
     res.json(project);
   } catch (error: any) {
@@ -239,7 +240,7 @@ router.get('/issues/assigned', async (req, res) => {
       return res.status(404).json({ message: 'No Jira connection found for this user' });
     }
 
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const issues = await client.getAssignedIssues();
 
     for (const issue of issues.issues ?? []) {
@@ -273,7 +274,7 @@ router.post('/issues/search', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const issues = await client.searchIssues({
       jql: req.body?.jql,
       query: req.body?.query,
@@ -289,16 +290,50 @@ router.post('/issues/search', async (req, res) => {
   }
 });
 
+router.post('/issues/similar', async (req, res) => {
+  try {
+    const orgId = resolveOrgId(req);
+    if (!orgId) return res.status(400).json({ message: 'org_id required' });
+    const { projectKey, summary, description, limit = 5 } = req.body || {};
+    if (!summary && !description) {
+      return res.status(400).json({ message: 'summary or description required' });
+    }
+    const text = [summary, description].filter(Boolean).join('\n');
+    const { rows } = await pool.query(
+      `
+        SELECT ticket_id as key,
+               title as summary,
+               resolution as "rootCause",
+               metadata->>'howSolved' as "howSolved",
+               metadata->>'solvedBy' as "solvedBy",
+               metadata->>'resolutionComment' as "resolutionComment",
+               metadata->>'timeTaken' as "timeTaken",
+               0 as "similarityScore"
+        FROM jira_embeddings
+        WHERE org_id = $1
+          AND ($2::text IS NULL OR metadata->>'projectKey' = $2)
+        ORDER BY updated_at DESC
+        LIMIT $3
+      `,
+      [orgId, projectKey ?? null, limit],
+    );
+    res.json({ items: rows });
+  } catch (error: any) {
+    res.status(500).json({ message: error?.message ?? 'Failed to search similar issues' });
+  }
+});
+
 router.get('/issues/:key', async (req, res) => {
   try {
     const orgId = resolveOrgId(req);
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const issue = await client.getIssue(req.params.key);
     await ingestJiraIssue(issue, orgId, forgeUserId);
-    res.json(issue);
+    const browseUrl = (tokens as any)?.jira_domain;
+    res.json({ issue: normalizeJiraIssue(issue, browseUrl) });
   } catch (error: any) {
     res.status(500).json({ message: error?.message ?? 'Failed to fetch issue' });
   }
@@ -310,7 +345,7 @@ router.post('/issues', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const issue = await client.createIssue(req.body);
     await ingestJiraIssue(issue, orgId, forgeUserId);
     res.json(issue);
@@ -325,7 +360,7 @@ router.patch('/issues/:key', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     await client.updateIssue(req.params.key, req.body);
     const issue = await client.getIssue(req.params.key);
     await ingestJiraIssue(issue, orgId, forgeUserId);
@@ -341,7 +376,7 @@ router.post('/issues/:key/comment', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const comment = await client.addComment(req.params.key, req.body);
     res.json(comment);
   } catch (error: any) {
@@ -355,7 +390,7 @@ router.post('/issues/:key/attachments', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const form = new FormData();
     if (req.body?.files && Array.isArray(req.body.files)) {
       for (const file of req.body.files) {

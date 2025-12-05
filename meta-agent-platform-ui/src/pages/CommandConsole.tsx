@@ -6,6 +6,10 @@ import { type Ticket as TicketType } from "@/data/mockTickets";
 import { cn } from "@/lib/utils";
 import { API_BASE } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { getIssueDetails, type JiraIssueDetails } from "@/hooks/useJiraIssue";
+import type { SimilarIssue } from "@/types/jira";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Message = {
   role: "user" | "assistant";
@@ -30,9 +34,9 @@ const cleanDescription = (raw: unknown) => {
   return "";
 };
 
-const mapIssueToTicket = (issue: any): TicketType | null => {
+const mapIssueToTicket = (issue: Record<string, unknown> | null | undefined): TicketType | null => {
   if (!issue) return null;
-  const fields = issue.fields || {};
+  const fields = (issue as any).fields || {};
   const statusName = String(fields.status?.name ?? "").toLowerCase();
   const status: TicketType["status"] =
     statusName.includes("done") || statusName.includes("resolved") || statusName.includes("closed")
@@ -54,6 +58,11 @@ const mapIssueToTicket = (issue: any): TicketType | null => {
   const description = cleanDescription(descriptionRaw);
   const reporter = fields.assignee?.displayName || fields.reporter?.displayName || "Unassigned";
   const createdAt = fields.created || new Date().toISOString();
+  const comments = (fields.comment?.comments || []).map((c: any) => ({
+    author: c.author?.displayName,
+    body: cleanDescription(c.body ?? c.renderedBody ?? ""),
+    created: c.created,
+  }));
 
   return {
     id: issue.id || issue.key || fields.id || fields.key || `jira-${Math.random().toString(36).slice(2)}`,
@@ -65,6 +74,7 @@ const mapIssueToTicket = (issue: any): TicketType | null => {
     reporter,
     createdAt,
     source: fields.project?.name || "Jira",
+    comments,
   };
 };
 
@@ -78,11 +88,19 @@ export default function CommandConsole() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketType[]>([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [issueDetails, setIssueDetails] = useState<Record<string, JiraIssueDetails>>({});
+  const [similarIssues, setSimilarIssues] = useState<Record<string, SimilarIssue[]>>({});
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const agents = [
     { id: "core", name: "Atlas Core" },
     { id: "diagnosis", name: "Diagnosis Engine" },
     { id: "analysis", name: "Analysis Agent" },
+  ];
+  const statusStages = [
+    "Analyzing issue…",
+    "Searching KB for relevant documentation…",
+    "Searching for similar solved Jira tickets…",
+    "Compiling diagnosis…",
   ];
   const [mentionCandidates, setMentionCandidates] = useState(agents);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -91,6 +109,25 @@ export default function CommandConsole() {
 
   const pendingCount = tickets.filter((t) => t.status === "open" || t.status === "in-progress").length;
   const closedCount = tickets.filter((t) => t.status === "closed").length;
+  const formatContent = (text: string) =>
+    text
+      // Space around any markdown header
+      .replace(/(#+\s*[^\n]+)/g, "\n\n$1\n\n")
+      // Space around horizontal rules
+      .replace(/---/g, "\n\n---\n\n")
+      // Ensure list items have space before them
+      .replace(/(\n)(\d+\.|\-)\s/g, "\n$2 ")
+      // Fix accidental triple newlines
+      .replace(/(\n){3,}/g, "\n\n")
+      // Trim edges
+      .trim();
+  const formatAssistantMarkdown = (text: string) =>
+    text
+      .replace(/(\S)(#+\s)/g, "$1\n$2")
+      .replace(/(\S)(\n?\d+\.\s)/g, "$1\n$2")
+      .replace(/(\S)(\n?-\s)/g, "$1\n$2")
+      .replace(/(\n){3,}/g, "\n\n")
+      .trim();
 
   const fetchIssues = useCallback(async () => {
     setTicketsLoading(true);
@@ -137,11 +174,21 @@ export default function CommandConsole() {
   const handleSend = async () => {
     if (!input.trim()) return;
 
+    const needsZscalerKb = /\b(zscaler|zpa|zia|zdx|zs cloud|zero trust|z-tunnel|z tunnel|private access|internet access)\b/i.test(
+      input,
+    );
     const history = messages
       .filter((m) => m.content && m.content !== "__streaming__")
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
       .join("\n");
-    const payload = history ? `${history}\nUser: ${input}` : input;
+    const kbInstruction = needsZscalerKb
+      ? "\n\nWhen the user mentions Zscaler, search the Zscaler KB, cite sources, and answer concisely."
+      : "\n\nAlways search the internal KB embeddings first and cite sources; if no relevant matches are found, fall back to LLM.";
+    const citationInstruction =
+      "\n\nCite sources inline using [source-name](url) and end with a bullet list under 'Sources:'; if no sources, explicitly say 'No sources found.'";
+    const payload = history
+      ? `${history}\nUser: ${input}${kbInstruction}${citationInstruction}`
+      : `${input}${kbInstruction}${citationInstruction}`;
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
@@ -330,15 +377,72 @@ export default function CommandConsole() {
     ]);
   };
 
-  const handleSelectTicket = (ticket: TicketType) => {
+  const handleSelectTicket = async (ticket: TicketType) => {
     setSelectedTicket(ticket);
     setMessages((prev) => [
       ...prev,
       {
         role: "assistant",
-        content: `**${ticket.key}: ${ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${ticket.description}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+        content: `Loading ${ticket.key}... fetching full details and similar issues.`,
       },
     ]);
+    const headers: Record<string, string> = {};
+    const storedToken =
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("sb-access-token") ||
+      localStorage.getItem("sb-auth-token");
+    if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+    const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+    if (orgId) headers["x-org-id"] = orgId;
+    if (user?.id) headers["x-account-id"] = user.id;
+    const license = localStorage.getItem("forge_license_key");
+    if (license) headers["x-license-key"] = license;
+    try {
+      const issue = await getIssueDetails(ticket.key, headers);
+      setIssueDetails((prev) => ({ ...prev, [ticket.key]: issue }));
+
+      const body = JSON.stringify({
+        projectKey: issue.key?.split("-")?.[0],
+        summary: issue.summary,
+        description: issue.descriptionHtml,
+        limit: 5,
+      });
+      try {
+        const res = await fetch(`${API_BASE}/connectors/jira/api/issues/similar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          credentials: "include",
+          body,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: data.items ?? [] }));
+        } else {
+          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+        }
+      } catch (err) {
+        console.error("[console] failed to load similar issues", err);
+        setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+      }
+
+      const descText = issue.descriptionHtml ? cleanDescription(issue.descriptionHtml) : ticket.description;
+      setMessages((prev) => [
+        ...prev.filter((m) => !m.content.startsWith("Loading ")),
+        {
+          role: "assistant",
+          content: `**${ticket.key}: ${issue.summary || ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${descText}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+        },
+      ]);
+    } catch (err) {
+      console.error("[console] failed to load issue details", err);
+      setMessages((prev) => [
+        ...prev.filter((m) => !m.content.startsWith("Loading ")),
+        {
+          role: "assistant",
+          content: `**${ticket.key}: ${ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${ticket.description || "Description not available."}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+        },
+      ]);
+    }
   };
 
   useEffect(() => {
@@ -426,20 +530,45 @@ export default function CommandConsole() {
               "max-w-[80%] whitespace-pre-wrap",
               message.role === "user"
                 ? "rounded-2xl px-4 py-3 bg-atlas-glow/20 text-foreground ml-auto"
-                : "text-foreground",
+                : "text-foreground prose prose-invert max-w-none",
             )}
           >
-            {message.content}
+            {message.role === "assistant" ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node, ...props }) => (
+                    <a className="text-blue-400 underline" target="_blank" rel="noreferrer" {...props} />
+                  ),
+                  ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1" {...props} />,
+                  ol: ({ node, ...props }) => <ol className="list-decimal pl-4 space-y-1" {...props} />,
+                }}
+              >
+                {formatAssistantMarkdown(message.content)}
+              </ReactMarkdown>
+            ) : (
+              formatContent(message.content)
+            )}
           </div>
         </div>
       ))}
       {isTyping && (
         <div className="flex justify-start animate-fade-in">
-          <div className="bg-muted rounded-2xl px-4 py-3">
+          <div className="bg-muted rounded-2xl px-4 py-3 space-y-2">
             <div className="flex gap-1">
               <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "0ms" }} />
               <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "150ms" }} />
               <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              {statusStages.map((stage, idx) => (
+                <div key={stage} className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-atlas-glow/70" />
+                  <span className={cn("transition-opacity", idx === statusStages.length - 1 ? "font-semibold text-foreground" : "")}>
+                    {stage}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -527,6 +656,8 @@ export default function CommandConsole() {
             onSelectTicket={handleSelectTicket}
             onClearSelection={() => setSelectedTicket(null)}
             loading={ticketsLoading}
+            issueDetails={issueDetails}
+            similarIssues={similarIssues}
           />
         </div>
       </div>

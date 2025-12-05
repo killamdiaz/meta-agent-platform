@@ -7,12 +7,29 @@ import { cn } from "@/lib/utils";
 type TicketDetailProps = {
   ticket: Ticket;
   onBack: () => void;
+  details?: {
+    descriptionHtml?: string;
+    comments?: Array<{ author?: string; body?: string; created?: string }>;
+    attachments?: Array<{ filename?: string; url?: string; size?: number }>;
+    url?: string;
+  };
+  similarIssues?: Array<{
+    key: string;
+    summary?: string;
+    rootCause?: string;
+    howSolved?: string;
+    solvedBy?: string;
+    resolutionComment?: string;
+    timeTaken?: string;
+    similarityScore?: number;
+  }>;
 };
 
-export default function TicketDetail({ ticket, onBack }: TicketDetailProps) {
+export default function TicketDetail({ ticket, onBack, details, similarIssues }: TicketDetailProps) {
   const [activeTab, setActiveTab] = useState<"All" | "Comments" | "History" | "Work log" | "Approvals">("Comments");
   const [showDetails, setShowDetails] = useState(true);
   const tabs = ["All", "Comments", "History", "Work log", "Approvals"] as const;
+  const comments = details?.comments ?? ticket.comments ?? [];
 
   return (
     <div className="flex flex-col h-full">
@@ -71,7 +88,18 @@ export default function TicketDetail({ ticket, onBack }: TicketDetailProps) {
                 <span className="text-muted-foreground"> raised this request via </span>
                 <span className="font-medium text-foreground">{ticket.source}</span>
               </p>
-              <button className="text-xs text-atlas-glow hover:underline">View request in portal</button>
+              {details?.url ? (
+                <a
+                  href={details.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-atlas-glow hover:underline"
+                >
+                  View request in portal
+                </a>
+              ) : (
+                <span className="text-xs text-muted-foreground">View request in portal</span>
+              )}
             </div>
           </div>
           <button onClick={() => setShowDetails(!showDetails)} className="text-xs text-atlas-glow hover:underline">
@@ -82,7 +110,16 @@ export default function TicketDetail({ ticket, onBack }: TicketDetailProps) {
         {showDetails && (
           <div className="mt-4 pt-4 border-t border-border/50">
             <p className="text-sm text-muted-foreground mb-1">Description</p>
-            <p className="text-sm text-foreground">{ticket.description}</p>
+            {details?.descriptionHtml ? (
+              <div
+                className="prose prose-invert max-w-none"
+                dangerouslySetInnerHTML={{ __html: details.descriptionHtml }}
+              />
+            ) : (
+              <p className="text-sm text-foreground whitespace-pre-wrap">
+                {ticket.description || "No description provided."}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -130,6 +167,70 @@ export default function TicketDetail({ ticket, onBack }: TicketDetailProps) {
           <span className="font-medium">Pro tip:</span> press{" "}
           <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px]">M</kbd> to comment
         </p>
+
+        {comments.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {comments.map((comment, idx) => (
+              <div key={idx} className="border border-border/50 rounded-lg p-3 bg-card/40">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-foreground">{comment.author || "Comment"}</span>
+                  {comment.created && (
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(comment.created).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-foreground whitespace-pre-wrap">{comment.body || "No content"}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {similarIssues && similarIssues.length > 0 && (
+          <div className="mt-6">
+            <h4 className="text-sm font-semibold text-foreground mb-2">Similar solved tickets</h4>
+            <div className="space-y-3">
+              {similarIssues.map((issue, idx) => (
+                <div key={issue.key || idx} className="border border-border/50 rounded-lg p-3 bg-card/40">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">{issue.key}</span>
+                    {issue.similarityScore !== undefined && (
+                      <span className="text-xs text-muted-foreground">
+                        {(issue.similarityScore * 100).toFixed(0)}% match
+                      </span>
+                    )}
+                  </div>
+                  {issue.summary && <p className="text-sm text-foreground mt-1">{issue.summary}</p>}
+                  {issue.howSolved && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">How solved:</span> {issue.howSolved}
+                    </p>
+                  )}
+                  {issue.rootCause && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">Root cause:</span> {issue.rootCause}
+                    </p>
+                  )}
+                  {issue.resolutionComment && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">Resolution comment:</span> {issue.resolutionComment}
+                    </p>
+                  )}
+                  {issue.solvedBy && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">Solved by:</span> {issue.solvedBy}
+                    </p>
+                  )}
+                  {issue.timeTaken && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">Time taken:</span> {issue.timeTaken}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -51,14 +51,28 @@ export class JiraClient {
     });
   }
 
-  static async fromTokens(tokens: any) {
-    if (!tokens?.access_token || !tokens?.cloud_id) {
+  static async fromTokens(tokens: any, orgId?: string, forgeUserId?: string) {
+    let active = tokens;
+    const expiresAt = tokens?.expires_at ? new Date(tokens.expires_at).getTime() : null;
+    const shouldRefresh =
+      orgId &&
+      forgeUserId &&
+      expiresAt !== null &&
+      expiresAt - Date.now() < 5 * 60 * 1000 &&
+      tokens?.refresh_token;
+    if (shouldRefresh) {
+      const refreshed = await refreshJiraToken(orgId!, forgeUserId!);
+      if (refreshed) {
+        active = refreshed;
+      }
+    }
+    if (!active?.access_token || !active?.cloud_id) {
       throw new Error('Missing Jira access_token or cloud_id');
     }
     return new JiraClient({
-      accessToken: tokens.access_token,
-      cloudId: tokens.cloud_id,
-      jiraDomain: tokens.jira_domain ?? null
+      accessToken: active.access_token,
+      cloudId: active.cloud_id,
+      jiraDomain: active.jira_domain ?? null
     });
   }
 
