@@ -7,14 +7,20 @@ export function handleSlackInstall(req: Request, res: Response) {
     res.status(500).json({ message: 'SLACK_CLIENT_ID not configured' });
     return;
   }
+  const licenseKey = typeof req.query.license_key === 'string' ? req.query.license_key : null;
   const orgId = resolveOrgId(req);
   const accountId = resolveAccountId(req);
-  const redirectUri =
+  const baseRedirect =
     config.slackRedirectUrl || `${req.protocol}://${req.get('host')}/connectors/slack/api/activate`;
+  const redirectUri =
+    licenseKey === null
+      ? baseRedirect
+      : `${baseRedirect}${baseRedirect.includes('?') ? '&' : '?'}license_key=${encodeURIComponent(licenseKey)}`;
   const statePayload = encodeURIComponent(
     JSON.stringify({
       org_id: orgId,
       account_id: accountId,
+      license_key: licenseKey,
     }),
   );
   const url = new URL('https://slack.com/oauth/v2/authorize');

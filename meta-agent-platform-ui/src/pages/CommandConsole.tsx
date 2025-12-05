@@ -106,6 +106,9 @@ export default function CommandConsole() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [ticketView, setTicketView] = useState<"pending" | "resolved">("pending");
+  const [toast, setToast] = useState<string | null>(null);
+  const ticketCacheKey = user?.id ? `atlas-tickets-${user.id}` : null;
 
   const pendingCount = tickets.filter((t) => t.status === "open" || t.status === "in-progress").length;
   const closedCount = tickets.filter((t) => t.status === "closed").length;
@@ -150,6 +153,7 @@ export default function CommandConsole() {
       if (!res.ok) {
         if (res.status === 404 || res.status === 400) {
           setTickets([]);
+          if (ticketCacheKey) localStorage.removeItem(ticketCacheKey);
           return;
         }
         const text = await res.text();
@@ -160,16 +164,87 @@ export default function CommandConsole() {
         ? (data.issues.map(mapIssueToTicket).filter(Boolean) as TicketType[])
         : [];
       setTickets(mapped);
+      if (ticketCacheKey) localStorage.setItem(ticketCacheKey, JSON.stringify(mapped));
     } catch (error) {
       console.error("[console] failed to load Jira issues", error);
     } finally {
       setTicketsLoading(false);
     }
-  }, [user]);
+  }, [user, ticketCacheKey]);
+
+  useEffect(() => {
+    if (!ticketCacheKey) return;
+    const cached = localStorage.getItem(ticketCacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) setTickets(parsed);
+      } catch {
+        /* ignore bad cache */
+      }
+    }
+  }, [ticketCacheKey]);
 
   useEffect(() => {
     void fetchIssues();
   }, [fetchIssues]);
+
+  const handleResolveTicket = async (ticket: TicketType) => {
+    const headers: Record<string, string> = {};
+    const storedToken =
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("sb-access-token") ||
+      localStorage.getItem("sb-auth-token");
+    if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+    const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+    if (orgId) headers["x-org-id"] = orgId;
+    if (user?.id) headers["x-account-id"] = user.id;
+    const license = localStorage.getItem("forge_license_key");
+    if (license) headers["x-license-key"] = license;
+    const issue = issueDetails[ticket.key];
+    const payload = {
+      issue: {
+        key: ticket.key,
+        fields: {
+          summary: issue?.summary ?? ticket.title,
+          description: issue?.descriptionHtml ?? ticket.description,
+          status: { name: "Done" },
+          reporter: { displayName: ticket.reporter },
+          priority: { name: ticket.priority },
+        },
+        changelog: issue?.changelog,
+      },
+    };
+    try {
+      await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...headers },
+        credentials: "include",
+        body: JSON.stringify({
+          fields: {
+            resolution: { name: "Done" },
+            status: { name: "Done" },
+          },
+        }),
+      });
+      await fetch(`${API_BASE}/connectors/jira/api/issues/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+      setTickets((prev) => prev.map((t) => (t.key === ticket.key ? { ...t, status: "closed" } : t)));
+      setTicketView("resolved");
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Ticket ${ticket.key} resolved and ingested.` },
+      ]);
+      setToast(`Ticket ${ticket.key} resolved`);
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      console.error("[console] failed to ingest resolved ticket", err);
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -521,16 +596,33 @@ export default function CommandConsole() {
     </div>
   );
 
+  const shouldCenterIntro =
+    showTicketView &&
+    messages.length === 1 &&
+    messages[0]?.role === "assistant" &&
+    messages[0]?.content.includes("I've loaded your Jira issues");
+
   const renderMessages = () => (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div
+      className={cn(
+        "max-w-3xl mx-auto space-y-6",
+        shouldCenterIntro && "h-full flex flex-col justify-center items-center",
+      )}
+    >
       {messages.map((message, i) => (
-        <div key={i} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}>
+        <div
+          key={i}
+          className={`flex ${
+            shouldCenterIntro ? "justify-center" : message.role === "user" ? "justify-end" : "justify-start"
+          } animate-fade-in`}
+        >
           <div
             className={cn(
               "max-w-[80%] whitespace-pre-wrap",
               message.role === "user"
                 ? "rounded-2xl px-4 py-3 bg-atlas-glow/20 text-foreground ml-auto"
                 : "text-foreground prose prose-invert max-w-none",
+              shouldCenterIntro && "text-center",
             )}
           >
             {message.role === "assistant" ? (
@@ -642,8 +734,15 @@ export default function CommandConsole() {
 
   if (showTicketView) {
     return (
-      <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto">
+      <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto relative">
         <div className="flex-[3] flex flex-col bg-card/30 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
+          {toast && (
+            <div className="absolute top-6 right-6 z-50">
+              <div className="bg-card/90 border border-border text-foreground px-4 py-3 rounded-xl shadow-lg animate-fade-in">
+                {toast}
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
             {renderMessages()}
           </div>
@@ -658,6 +757,9 @@ export default function CommandConsole() {
             loading={ticketsLoading}
             issueDetails={issueDetails}
             similarIssues={similarIssues}
+            view={ticketView}
+            onChangeView={setTicketView}
+            onResolveTicket={handleResolveTicket}
           />
         </div>
       </div>

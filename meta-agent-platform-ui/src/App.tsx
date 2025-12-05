@@ -12,6 +12,7 @@ import MultiAgentConsole from "./pages/MultiAgentConsole";
 import ToolAgentConsole from "./pages/ToolAgentConsole";
 import Settings from "./pages/Settings";
 import Integrations from "./pages/Integrations";
+import Exhausts from "./pages/Exhausts";
 import DataSources from "./pages/DataSources";
 import Billing from "./pages/Billing";
 import Help from "./pages/Help";
@@ -50,6 +51,7 @@ const AppRoutes = () => {
             <Route path="/multi-agent" element={<MultiAgentConsole />} />
             <Route path="/console" element={<CommandConsole />} />
             <Route path="/multi-agent/runtime" element={<ToolAgentConsole />} />
+            <Route path="/exhausts" element={<Exhausts />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/billing" element={<Billing />} />
             <Route path="/integrations" element={<Integrations />} />

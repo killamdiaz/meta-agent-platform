@@ -21,6 +21,10 @@ export async function recordIntegrationNode(orgId: string, connectorType: string
 
 export function normalizeJiraIssue(issue: any) {
   const fields = issue?.fields || {};
+  const resolution = fields.resolution?.name;
+  const lastComment = fields.comment?.comments?.length
+    ? fields.comment.comments[fields.comment.comments.length - 1]?.body
+    : undefined;
   return {
     key: issue.key,
     summary: fields.summary,
@@ -30,7 +34,9 @@ export function normalizeJiraIssue(issue: any) {
     assignee: fields.assignee?.displayName,
     priority: fields.priority?.name,
     comments: fields.comment?.comments ?? [],
-    url: fields?.issuetype?.self
+    url: fields?.issuetype?.self,
+    resolution,
+    lastComment
   };
 }
 
@@ -51,7 +57,9 @@ export async function ingestJiraIssue(issue: any, orgId: string, accountId?: str
       accountId: accountId ?? null,
       metadata: {
         priority: normalized.priority,
-        comments: normalized.comments?.slice(-3).map((c: any) => c.body)
+        comments: normalized.comments?.slice(-3).map((c: any) => c.body),
+        resolution: normalized.resolution,
+        lastComment: normalized.lastComment
       }
     } as any
   );

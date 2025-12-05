@@ -32,7 +32,7 @@ export default function TicketDetail({ ticket, onBack, details, similarIssues }:
   const comments = details?.comments ?? ticket.comments ?? [];
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full break-words">
       <div className="flex items-center gap-3 mb-4">
         <button onClick={onBack} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors">
           <ChevronLeft className="w-4 h-4" />
@@ -53,7 +53,7 @@ export default function TicketDetail({ ticket, onBack, details, similarIssues }:
 
       <h2 className="text-xl font-semibold text-foreground mb-4">{ticket.title}</h2>
 
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex items-center gap-2 mb-6 flex-wrap">
         <Button variant="outline" size="sm" className="text-xs h-8">
           <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -131,9 +131,9 @@ export default function TicketDetail({ ticket, onBack, details, similarIssues }:
         </button>
       </div>
 
-      <div className="flex-1">
+      <div className="flex-1 min-h-0">
         <h3 className="text-sm font-medium text-foreground mb-3">Activity</h3>
-        <div className="flex items-center gap-1 mb-4">
+        <div className="flex flex-wrap items-center gap-1 mb-4">
           {tabs.map((tab) => (
             <button
               key={tab}
