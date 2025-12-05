@@ -15,8 +15,8 @@ function mapAgentStatus(status: string): 'active' | 'new' | 'older' | 'forgotten
   }
 }
 
-function mapMemoryStatus(createdAt: string): 'active' | 'new' | 'older' | 'forgotten' | 'expiring' {
-  const created = new Date(createdAt).getTime();
+function mapMemoryStatus(memory: { created_at: string }): 'active' | 'new' | 'older' | 'forgotten' | 'expiring' {
+  const created = new Date(memory.created_at).getTime();
   const ageHours = (Date.now() - created) / (1000 * 60 * 60);
   if (Number.isNaN(ageHours) || ageHours < 0) {
     return 'active';
@@ -35,7 +35,7 @@ function mapMemoryStatus(createdAt: string): 'active' | 'new' | 'older' | 'forgo
 
 router.get('/graph', async (_req, res, next) => {
   try {
-    const [agentsResult, memoriesResult, tasksResult] = await Promise.all([
+    const [agentsResult, memoriesResult, tasksResult, integrationResult, docsResult] = await Promise.all([
       pool.query<{
         id: string;
         name: string;
@@ -47,9 +47,26 @@ router.get('/graph', async (_req, res, next) => {
         id: string;
         agent_id: string;
         content: string;
-        created_at: string;
         metadata: Record<string, unknown>;
-      }>(`SELECT id, agent_id, content, metadata, created_at FROM agent_memory ORDER BY created_at DESC LIMIT 300`),
+        created_at: string;
+      }>(
+        `SELECT m.id,
+                COALESCE(a.settings->>'alias', a.name, m.agent_id::text) AS agent_id,
+                m.content,
+                m.metadata,
+                m.created_at
+           FROM agent_memory m
+           LEFT JOIN agents a ON a.id = m.agent_id
+          WHERE m.memory_type = 'long_term'
+            AND COALESCE(m.metadata->>'category', '') <> 'conversation'
+            AND m.content NOT ILIKE 'received % message %'
+            AND m.content NOT ILIKE 'sent % message %'
+            AND m.content NOT ILIKE 'reply to %'
+            AND m.content NOT ILIKE 'sent to slack%'
+            AND m.content NOT ILIKE 'slack user%'
+          ORDER BY m.created_at DESC
+          LIMIT 300`
+      ),
       pool.query<{
         id: string;
         agent_id: string;
@@ -61,6 +78,32 @@ router.get('/graph', async (_req, res, next) => {
            FROM tasks
           ORDER BY created_at DESC
           LIMIT 50`
+      ),
+      pool.query<{
+        id: string;
+        source_id: string | null;
+        metadata: Record<string, unknown> | null;
+        content: string;
+        created_at: string;
+      }>(
+        `SELECT id, source_id, metadata, content, created_at
+           FROM forge_embeddings
+          WHERE source_type = 'integration'
+          ORDER BY created_at DESC
+          LIMIT 50`
+      ),
+      pool.query<{
+        id: string;
+        source_id: string | null;
+        metadata: Record<string, unknown> | null;
+        content: string;
+        created_at: string;
+      }>(
+        `SELECT id, source_id, metadata, content, created_at
+           FROM forge_embeddings
+          WHERE source_type = 'crawler'
+          ORDER BY created_at DESC
+          LIMIT 200`
       )
     ]);
 
@@ -75,14 +118,51 @@ router.get('/graph', async (_req, res, next) => {
       }
     }));
 
+    const integrationNodes = integrationResult.rows.map((row) => {
+      const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+      return {
+        id: row.id,
+        type: 'integration',
+        label: (meta.label as string) || row.content || row.id,
+        status: 'active' as const,
+        metadata: {
+          createdAt: row.created_at,
+          sourceId: row.source_id,
+          color: (meta.color as string) || '#f97316',
+          ...meta
+        }
+      };
+    });
+
+    const documentNodes = docsResult.rows.map((row) => {
+      const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+      const label = (meta.title as string) || row.content || row.source_id || row.id;
+      return {
+        id: `doc-${row.id}`,
+        type: 'document',
+        label: label.length > 80 ? `${label.slice(0, 77)}...` : label,
+        status: 'active' as const,
+        metadata: {
+          createdAt: row.created_at,
+          sourceId: row.source_id,
+          color: '#a855f7',
+          ...meta
+        }
+      };
+    });
+
     const memoryNodes = memoriesResult.rows.map((memory) => ({
       id: memory.id,
       type: 'memory',
       label: memory.content.length > 80 ? `${memory.content.slice(0, 77)}...` : memory.content,
-      status: mapMemoryStatus(memory.created_at),
+      status: mapMemoryStatus({
+        created_at: memory.created_at
+      }),
       metadata: {
         createdAt: memory.created_at,
-        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id
+        createdBy: (memory.metadata as { createdBy?: string } | null)?.createdBy ?? memory.agent_id,
+        memoryType: 'long_term',
+        expiresAt: null
       }
     }));
 
@@ -147,9 +227,28 @@ router.get('/graph', async (_req, res, next) => {
       strength: task.status === 'completed' ? 0.75 : 0.5
     }));
 
+    // Link integrations to all agents to anchor them centrally
+    const integrationLinks = integrationNodes.flatMap((integration) =>
+      agentNodes.map((agent) => ({
+        source: integration.id,
+        target: agent.id,
+        relation: 'shared' as const,
+        strength: 0.9
+      }))
+    );
+
+    const documentLinks = documentNodes.flatMap((doc) =>
+      agentNodes.map((agent) => ({
+        source: doc.id,
+        target: agent.id,
+        relation: 'extends' as const,
+        strength: 0.4
+      }))
+    );
+
     res.json({
-      nodes: [...agentNodes, ...memoryNodes, ...taskNodes],
-      links: [...agentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
+      nodes: [...agentNodes, ...integrationNodes, ...documentNodes, ...memoryNodes, ...taskNodes],
+      links: [...agentLinks, ...integrationLinks, ...documentLinks, ...memoryConnections, ...taskLinks, ...taskMemoryLinks]
     });
   } catch (error) {
     next(error);

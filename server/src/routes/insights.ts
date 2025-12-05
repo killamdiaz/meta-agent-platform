@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
+import { agentBroker } from '../multiAgent/index.js';
 
 const router = Router();
 
@@ -12,7 +13,11 @@ router.get('/overview', async (_req, res, next) => {
            FROM tasks
           GROUP BY status`
       ),
-      pool.query<{ count: string }>('SELECT COUNT(*)::text as count FROM agent_memory'),
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text as count
+           FROM agent_memory
+          WHERE memory_type != 'short_term' OR expires_at IS NULL OR expires_at > NOW()`
+      ),
       pool.query<{ day: string; count: number | null }>(
         `SELECT TO_CHAR(day, 'YYYY-MM-DD') as day, count
            FROM (
@@ -71,7 +76,8 @@ router.get('/overview', async (_req, res, next) => {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         agentName: row.agent_name
-      }))
+      })),
+      tokenUsage: agentBroker.getTokenUsage()
     });
   } catch (error) {
     next(error);

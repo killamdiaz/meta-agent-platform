@@ -2,15 +2,19 @@ import type {
   AgentRecord,
   AgentMemoryResponse,
   AgentConfigField,
+  AutomationRecord,
   BuildAgentResult,
   CommandResponse,
   GraphDataResponse,
   OverviewInsights,
   TaskRecord,
   MultiAgentSession,
+  AutomationBuilderResponse,
+  AutomationPipeline,
+  AutomationInterpretationResponse,
 } from '@/types/api';
 
-const API_BASE = (() => {
+export const API_BASE = (() => {
   const configured = import.meta.env.VITE_API_BASE_URL;
 
   const normalize = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
@@ -42,19 +46,28 @@ const API_BASE = (() => {
   return configured ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 })();
 
+type ApiError = Error & { status?: number };
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...rest } = options;
+  const mergedHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(headers as Record<string, string>),
+  };
+  const licenseKey = localStorage.getItem('forge_license_key');
+  if (licenseKey) {
+    mergedHeaders['x-license-key'] = licenseKey;
+  }
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers ?? {}),
-    },
+    headers: mergedHeaders,
     ...rest,
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || response.statusText);
+    const error: ApiError = new Error(text || response.statusText);
+    error.status = response.status;
+    throw error;
   }
 
   if (response.status === 204) {
@@ -136,10 +149,10 @@ export const api = {
     });
   },
 
-  runCommand(input: string): Promise<CommandResponse> {
+  runCommand(input: string, orgId?: string | null): Promise<CommandResponse> {
     return request('/commands', {
       method: 'POST',
-      body: JSON.stringify({ input }),
+      body: JSON.stringify({ input, org_id: orgId ?? undefined }),
     });
   },
 
@@ -202,6 +215,202 @@ export const api = {
 
   fetchMultiAgentMemory(): Promise<MultiAgentSession['memory']> {
     return request('/multi-agent/memory');
+  },
+
+  dispatchToolAgentPrompt(prompt: string, options?: { agentId?: string; limit?: number; mode?: 'auto' | 'context' | 'task' }) {
+    return request<{
+      status: string;
+      agent: { id: string; name: string; role: string; agentType: string };
+      messageId: string;
+      dispatchedAt: string;
+      mode: 'context' | 'task';
+      limit?: number;
+    }>('/multi-agent/tool-agents/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        agentId: options?.agentId,
+        limit: options?.limit,
+        mode: options?.mode ?? 'auto',
+      }),
+    });
+  },
+
+  listAutomations(): Promise<{ items: AutomationRecord[] }> {
+    return request('/automations');
+  },
+
+  createAutomation(payload: { name: string; automation_type: string; metadata?: Record<string, unknown> }): Promise<AutomationRecord> {
+    return request('/automations', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateAutomation(id: string, payload: { name: string; automation_type: string; metadata?: Record<string, unknown> }): Promise<AutomationRecord> {
+    return request(`/automations/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  sendAutomationMessage(payload: { sessionId: string; message: string }): Promise<AutomationBuilderResponse> {
+    return request('/automation-builder/message', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  provideAutomationKey(payload: { sessionId: string; agent: string; value: string }): Promise<AutomationBuilderResponse> {
+    return request('/automation-builder/key', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  endAutomationSession(sessionId: string): Promise<void> {
+    return request(`/automation-builder/session/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  interpretAutomationPrompt(
+    prompt: string,
+    context?: { pipeline?: AutomationPipeline | null; name?: string; description?: string },
+  ): Promise<AutomationInterpretationResponse> {
+    return request('/automation-builder/interpret', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        context: context ?? {},
+      }),
+    });
+  },
+
+  fetchSlackIntegrationStatus(orgId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
+    return request(`/connectors/slack/api/status${query}`);
+  },
+
+  fetchJiraIntegrationStatus(orgId?: string, accountId?: string): Promise<{ status: string; data: Record<string, unknown> }> {
+    const params = new URLSearchParams();
+    if (orgId) params.set('org_id', orgId);
+    if (accountId) params.set('account_id', accountId);
+    const query = params.toString();
+    return request(`/connectors/jira/api/status${query ? `?${query}` : ''}`);
+  },
+
+  disconnectSlackIntegration(orgId?: string): Promise<{ status: string }> {
+    const query = orgId ? `?org_id=${encodeURIComponent(orgId)}` : '';
+    return request(`/connectors/slack/api/deactivate${query}`, { method: 'POST' });
+  },
+
+  disconnectJiraIntegration(orgId?: string, accountId?: string): Promise<{ status: string }> {
+    const params = new URLSearchParams();
+    if (orgId) params.set('org_id', orgId);
+    if (accountId) params.set('account_id', accountId);
+    const query = params.toString();
+    return request(`/connectors/jira/api/disconnect${query ? `?${query}` : ''}`, { method: 'POST' });
+  },
+
+  fetchUsageSummary(orgId: string) {
+    return request<{ total_tokens: number; total_cost: number }>(`/usage/summary?org_id=${encodeURIComponent(orgId)}`);
+  },
+
+  fetchUsageDaily(orgId: string) {
+    return request<Array<{ bucket: string; total_tokens: number; total_cost: number }>>(
+      `/usage/daily?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageMonthly(orgId: string) {
+    return request<Array<{ bucket: string; total_tokens: number; total_cost: number }>>(
+      `/usage/monthly?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageBreakdown(orgId: string) {
+    return request<Array<{ source: string; total_tokens: number; total_cost: number }>>(
+      `/usage/breakdown?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageModels(orgId: string) {
+    return request<Array<{ model_name: string; model_provider: string; total_tokens: number; total_cost: number }>>(
+      `/usage/models?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchUsageAgents(orgId: string) {
+    return request<Array<{ agent_name: string; total_tokens: number; total_cost: number }>>(
+      `/usage/agents?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  fetchLicenseStatus(orgId: string, licenseKey?: string) {
+    const params = new URLSearchParams();
+    if (orgId) params.set("org_id", orgId);
+    if (licenseKey) params.set("license_key", licenseKey);
+    const qs = params.toString();
+    return request<{
+      license_id: string;
+      customer_name: string;
+      customer_id: string;
+      expires_at: string;
+      max_seats: number;
+      max_tokens: number;
+      license_key: string;
+      seats_used: number;
+      tokens_used: number;
+      valid: boolean;
+      reason?: string;
+    }>(`/api/license/status${qs ? `?${qs}` : ""}`);
+  },
+
+  validateLicense(license_key: string) {
+    return request('/api/license/validate', {
+      method: 'POST',
+      body: JSON.stringify({ license_key }),
+    });
+  },
+
+  refreshLicense(license_key: string) {
+    return request('/api/license/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ license_key }),
+    });
+  },
+
+  applyLicense(orgId: string, license_key: string) {
+    return request('/api/license/apply', {
+      method: 'POST',
+      body: JSON.stringify({ org_id: orgId, license_key }),
+    });
+  },
+
+  searchIngestion(orgId: string, query: string) {
+    return request<{ items: Array<{ id: string; source_type: string; source_id: string; content: string; metadata: Record<string, unknown>; created_at: string }> }>(
+      `/ingestion/search?org_id=${encodeURIComponent(orgId)}&q=${encodeURIComponent(query)}`
+    );
+  },
+
+  listImportJobs(orgId: string) {
+    return request<Array<{ id: string; org_id: string; source: string; status: string; progress: number; created_at: string }>>(
+      `/ingestion/jobs?org_id=${encodeURIComponent(orgId)}`
+    );
+  },
+
+  createImportJob(orgId: string, source: string) {
+    return request(`/ingestion/jobs`, {
+      method: "POST",
+      body: JSON.stringify({ org_id: orgId, source }),
+    });
+  },
+
+  deleteImportJob(orgId: string, id: string) {
+    return request(`/ingestion/jobs/${encodeURIComponent(id)}?org_id=${encodeURIComponent(orgId)}`, {
+      method: "DELETE",
+    });
   },
 };
 

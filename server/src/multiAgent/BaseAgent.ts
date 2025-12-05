@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import type { AgentRegistry } from './AgentRegistry.js';
 import {
   MessageBroker,
@@ -9,9 +8,20 @@ import {
 } from './MessageBroker.js';
 import { MemoryService } from '../services/MemoryService.js';
 import { config } from '../config.js';
+import { getCoreOrchestrator } from '../core/orchestrator-registry.js';
+import type { GovernedMessage } from '../core/orchestrator.js';
+import { routeMessage } from '../llm/router.js';
+import {
+  AtlasBridgeClient,
+  type AtlasBridgeClientOptions,
+  type AtlasBridgeRequestOptions,
+} from '../core/atlas/BridgeClient.js';
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
+
+export interface BaseAgentBridgeOptions extends Omit<AtlasBridgeClientOptions, 'agentId'> {
+  agentId?: string;
+}
 
 export interface BaseAgentOptions {
   id: string;
@@ -25,6 +35,7 @@ export interface BaseAgentOptions {
   connections?: string[];
   aliases?: string[];
   onStateChange?: (change: AgentStateChange) => void;
+  bridge?: BaseAgentBridgeOptions;
 }
 
 export interface AgentMemoryEntry {
@@ -78,6 +89,7 @@ export abstract class BaseAgent {
   readonly name: string;
   readonly role: string;
   readonly description?: string;
+  client: unknown = null;
 
   protected readonly broker: MessageBroker;
   protected readonly registry?: AgentRegistry;
@@ -100,6 +112,8 @@ export abstract class BaseAgent {
   private autonomyTimer: NodeJS.Timeout | null = null;
   private talking = false;
   private flushingFollowUps = false;
+  private atlasBridgeClient: AtlasBridgeClient | null = null;
+  private bridgeAgentId?: string;
 
   protected constructor(options: BaseAgentOptions) {
     this.id = options.id;
@@ -120,6 +134,10 @@ export abstract class BaseAgent {
         this.registerTopicAlias(alias);
       }
     }
+
+    if (options.bridge) {
+      this.configureAtlasBridge(options.bridge);
+    }
   }
 
   get isTalking(): boolean {
@@ -128,6 +146,131 @@ export abstract class BaseAgent {
 
   get connections(): string[] {
     return Array.from(this.connectionSet).filter(Boolean);
+  }
+
+  protected configureAtlasBridge(options: BaseAgentBridgeOptions): void {
+    const { agentId, ...rest } = options;
+    const candidateId = String(agentId ?? '').trim();
+    const resolvedAgentId =
+      candidateId.length > 0 && candidateId.toLowerCase() !== 'undefined' ? candidateId : this.id;
+    try {
+      const clientOptions: AtlasBridgeClientOptions = {
+        ...(rest as Omit<AtlasBridgeClientOptions, 'agentId'>),
+        agentId: resolvedAgentId,
+      };
+      this.atlasBridgeClient = new AtlasBridgeClient(clientOptions);
+      this.bridgeAgentId = resolvedAgentId;
+    } catch (error) {
+      console.warn(`[agent:${this.id}] failed to initialise Atlas bridge client`, {
+        error,
+        agentId: resolvedAgentId,
+      });
+      this.atlasBridgeClient = null;
+      this.bridgeAgentId = undefined;
+    }
+  }
+
+  protected hasAtlasBridge(): boolean {
+    return this.atlasBridgeClient !== null;
+  }
+
+  protected getAtlasBridgeAgentId(): string | undefined {
+    return this.bridgeAgentId;
+  }
+
+  protected setAtlasBridgeTokenProvider(provider?: () => Promise<string> | string) {
+    this.atlasBridgeClient?.setTokenProvider(provider);
+  }
+
+  protected updateAtlasBridgeToken(token: string | null | undefined) {
+    if (!this.atlasBridgeClient) return;
+    this.atlasBridgeClient.setToken(token);
+  }
+
+  protected clearAtlasBridgeCache(pathPrefix?: string) {
+    this.atlasBridgeClient?.clearCache(pathPrefix);
+  }
+
+  protected getMessageEventType(message: AgentMessage): string | null {
+    const metadata = message.metadata ?? {};
+    if (!metadata || typeof metadata !== 'object') {
+      return null;
+    }
+    const candidate =
+      (typeof (metadata as Record<string, unknown>).eventType === 'string'
+        ? (metadata as Record<string, unknown>).eventType
+        : undefined) ??
+      (typeof (metadata as Record<string, unknown>).intent === 'string'
+        ? (metadata as Record<string, unknown>).intent
+        : undefined);
+    if (!candidate) {
+      return null;
+    }
+    const trimmed = (candidate as string).trim().toLowerCase();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  protected getMessagePayload<T = unknown>(message: AgentMessage): T | undefined {
+    const metadata = message.metadata ?? {};
+    if (metadata && typeof metadata === 'object' && 'payload' in metadata) {
+      return (metadata as { payload?: T }).payload;
+    }
+    return undefined;
+  }
+
+  protected async callBridge<T>(options: AtlasBridgeRequestOptions): Promise<T> {
+    const bridge = this.ensureAtlasBridge();
+    return bridge.request<T>(options);
+  }
+
+  protected async callAtlas<T>(
+    path: string,
+    method: AtlasBridgeRequestOptions['method'] = 'GET',
+    body?: unknown,
+    options?: Omit<AtlasBridgeRequestOptions, 'path' | 'method' | 'body'>,
+  ): Promise<T> {
+    const request: AtlasBridgeRequestOptions = {
+      path,
+      method,
+      ...(options ?? {}),
+    };
+    if (body !== undefined) {
+      request.body = body;
+    }
+    return this.callBridge<T>(request);
+  }
+
+  protected async requestHelp(
+    targetAgentId: string,
+    query: string | Record<string, unknown>,
+    metadata?: Record<string, unknown>,
+  ): Promise<AgentMessage> {
+    if (!targetAgentId || targetAgentId === this.id) {
+      throw new Error('requestHelp requires a different target agent id.');
+    }
+    const content = typeof query === 'string' ? query : JSON.stringify(query, null, 2);
+    const payloadMetadata =
+      typeof query === 'string'
+        ? { prompt: query }
+        : { ...query };
+    const mergedMetadata: Record<string, unknown> = {
+      eventType: 'request_context',
+      intent: 'request_context',
+      requestedBy: this.id,
+      ...(metadata ?? {}),
+      payload: payloadMetadata,
+    };
+    if (this.bridgeAgentId) {
+      mergedMetadata.bridgeAgentId = this.bridgeAgentId;
+    }
+    return this.sendMessage(targetAgentId, 'task', content, mergedMetadata);
+  }
+
+  private ensureAtlasBridge(): AtlasBridgeClient {
+    if (!this.atlasBridgeClient) {
+      throw new Error(`Agent ${this.id} is not configured with an Atlas bridge client.`);
+    }
+    return this.atlasBridgeClient;
   }
 
   receiveMessage(message: AgentMessage) {
@@ -144,13 +287,39 @@ export abstract class BaseAgent {
     content: string,
     metadata?: AgentMessage['metadata'],
   ): Promise<AgentMessage> {
-    const message = this.broker.publish({
+    const orchestrator = getCoreOrchestrator();
+    const governed: GovernedMessage = {
       from: this.id,
       to,
-      type,
+      type: this.mapAgentMessageType(type),
+      intent: typeof metadata?.intent === 'string' ? metadata.intent : type,
       content,
-      metadata,
-    });
+      confidence: typeof metadata?.confidence === 'number' ? metadata.confidence : undefined,
+      tokens: typeof metadata?.tokens === 'number' ? metadata.tokens : undefined,
+      metadata: metadata as Record<string, unknown> | undefined,
+      requiredCapabilities: Array.isArray(metadata?.requiredCapabilities)
+        ? (metadata?.requiredCapabilities as string[])
+        : undefined,
+      requiredBindings: Array.isArray(metadata?.requiredBindings)
+        ? (metadata?.requiredBindings as string[])
+        : undefined,
+      conversationId: typeof metadata?.conversationId === 'string' ? metadata.conversationId : undefined,
+    };
+
+    const published = await orchestrator.broadcast(governed);
+    if (!published) {
+      throw new Error('Message blocked by conversation governor.');
+    }
+
+    const message: AgentMessage = {
+      id: published.id,
+      timestamp: published.timestamp,
+      from: published.from,
+      to: published.to,
+      type: published.type,
+      content: published.content,
+      metadata: published.metadata,
+    };
     this.noteConnection(to);
     this.recordMemory(message, 'outgoing');
     this.emitTalkingState(message, 'outgoing', true);
@@ -173,6 +342,17 @@ export abstract class BaseAgent {
     }, 250);
     this.teardownCallbacks.push(() => clearTimeout(deactivate));
     return message;
+  }
+
+  private mapAgentMessageType(type: AgentMessageType): GovernedMessage['type'] {
+    switch (type) {
+      case 'response':
+        return 'RESULT';
+      case 'task':
+        return 'TASK';
+      default:
+        return 'INFO';
+    }
   }
 
   getMemorySnapshot(): AgentMemoryEntry[] {
@@ -288,7 +468,11 @@ export abstract class BaseAgent {
   }): Promise<string> {
     const systemPrompt =
       options.systemPrompt ??
-      `You are Agent ${this.id}, part of a team of collaborating AI agents working together to solve problems.`;
+      [
+        `You are Agent ${this.id}, part of a team of collaborating AI agents working together to solve problems.`,
+        'You receive both short-term and long-term memories as context—treat them as authoritative and leverage them when replying.',
+        'Do not claim you lack memory or cannot remember; instead, draw from the provided memories or ask for clarification if details are missing.',
+      ].join(' ');
     const userPromptLines = [
       `You just received a message from Agent ${options.from}:`,
       `"${options.content}"`,
@@ -303,25 +487,11 @@ export abstract class BaseAgent {
       userPromptLines.push('', 'Metadata:', JSON.stringify(options.metadata, null, 2));
     }
 
-    if (!openai) {
-      return [
-        `(offline) ${this.name} drafting response...`,
-        `Received from ${options.from}: "${options.content}"`,
-        options.context ? `Context: ${options.context}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    }
-
-    const response = await openai.chat.completions.create({
-      model: this.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPromptLines.join('\n') },
-      ],
-      temperature: 0.4,
+    const reply = await routeMessage({
+      prompt: userPromptLines.join('\n'),
+      context: systemPrompt,
+      intent: 'agent_comms',
     });
-    const reply = response.choices[0]?.message?.content?.trim();
     if (!reply) {
       return 'No response generated.';
     }
@@ -394,6 +564,11 @@ export abstract class BaseAgent {
       to: message.to,
       from: message.from,
       metadata: message.metadata ?? {},
+      memoryType: 'short_term',
+      retention: 'short_term',
+      category: 'conversation',
+      ephemeral: true,
+      importance: 'low',
     }).catch((error) => {
       console.error('[agent-memory] failed to persist memory', { agentId: this.id, messageId: message.id, error });
     });

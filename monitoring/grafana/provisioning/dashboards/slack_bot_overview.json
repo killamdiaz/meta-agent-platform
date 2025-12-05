@@ -1,0 +1,37 @@
+{
+  "title": "Slack Bot Overview",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Slack Events Processed",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "slack_events_processed_total" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Slack Errors",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "errors_total" }
+      ],
+      "id": 2
+    },
+    {
+      "type": "logs",
+      "title": "Slack Bot Logs",
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "{service=\"slack-bot\"}"
+        }
+      ],
+      "id": 3
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true
+}

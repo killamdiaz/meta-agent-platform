@@ -1,0 +1,9 @@
+{
+  "name": "google-calendar-agent",
+  "description": "Schedules and updates events in Google Calendar with coordination context.",
+  "role": "Scheduling Agent",
+  "privilegeLevel": "tool",
+  "capabilities": ["execute", "create", "update", "notify"],
+  "safeActions": ["TASK", "RESULT"],
+  "commandScope": []
+}

@@ -42,6 +42,7 @@ export class SlackToolAgent extends BaseAgent {
         console.error('[slack-tool-agent] failed to resolve auth info', error);
       });
     this.startAutonomy(12000);
+    void this.bootstrapMonitoring();
   }
 
   protected override async processMessage(message: AgentMessage): Promise<void> {
@@ -93,6 +94,11 @@ export class SlackToolAgent extends BaseAgent {
           contextId,
           type: 'mention',
           userId: mention.user,
+          memoryType: 'short_term',
+          retention: 'short_term',
+          category: 'conversation',
+          ephemeral: true,
+          importance: 'low',
         });
         if (contextData.channel && mention.ts) {
           try {
@@ -105,6 +111,11 @@ export class SlackToolAgent extends BaseAgent {
               platform: 'slack',
               contextId,
               type: 'acknowledgement',
+              memoryType: 'short_term',
+              retention: 'short_term',
+              category: 'conversation',
+              ephemeral: true,
+              importance: 'low',
             });
           } catch (error) {
             console.error('[slack-tool-agent] failed to craft Slack reply', {
@@ -134,6 +145,19 @@ export class SlackToolAgent extends BaseAgent {
           agentId: this.id,
           error,
         });
+    }
+  }
+
+  private async bootstrapMonitoring() {
+    try {
+      console.log('[slack-tool-agent] initial mention sweep starting', { agentId: this.id });
+      await this.think();
+      console.log('[slack-tool-agent] initial mention sweep complete', { agentId: this.id });
+    } catch (error) {
+      console.error('[slack-tool-agent] bootstrap monitoring failed', {
+        agentId: this.id,
+        error,
+      });
     }
   }
 
@@ -189,6 +213,11 @@ export class SlackToolAgent extends BaseAgent {
         contextKeys: candidateKeys,
         messageId: message.id,
         metadata,
+        memoryType: 'short_term',
+        retention: 'short_term',
+        category: 'conversation',
+        ephemeral: true,
+        importance: 'low',
       });
     } catch (error) {
       console.error('[slack-tool-agent] failed to post message to Slack', {

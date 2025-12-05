@@ -1,0 +1,16 @@
+{
+  "name": "hubspot",
+  "version": "1.0.0",
+  "category": "crm",
+  "description": "Manage contacts, deals, and pipelines in HubSpot CRM.",
+  "required_auth": {
+    "type": "oauth2",
+    "scopes": [
+      "crm.objects.contacts.read",
+      "crm.objects.deals.write",
+      "crm.objects.deals.read"
+    ]
+  },
+  "example_actions": ["list_contacts", "create_deal", "update_pipeline_stage"],
+  "homepage": "https://developers.hubspot.com/docs/api/crm"
+}

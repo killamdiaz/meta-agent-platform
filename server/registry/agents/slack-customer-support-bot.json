@@ -1,0 +1,9 @@
+{
+  "name": "slack-customer-support-bot",
+  "description": "Handles frontline Slack support interactions, triaging and escalating customer issues.",
+  "role": "Support Bot",
+  "privilegeLevel": "tool",
+  "capabilities": ["respond", "notify", "summarize"],
+  "safeActions": ["TASK", "INFO", "RESULT"],
+  "commandScope": []
+}

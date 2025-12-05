@@ -1,0 +1,34 @@
+{
+  "title": "Ingestor Health",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Docs Parsed",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "ingestor_docs_parsed_total" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Queue Depth",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "ingestor_queue_depth" }
+      ],
+      "id": 2
+    },
+    {
+      "type": "logs",
+      "title": "Ingestor Logs",
+      "datasource": "Loki",
+      "targets": [
+        { "expr": "{service=\"ingestor\"}" }
+      ],
+      "id": 3
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

@@ -1,22 +1,26 @@
-import { useMemo } from "react";
-import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio, Boxes, Database, Coins } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { formatDistanceToNowStrict } from "date-fns";
+import { useTokenStore } from "@/store/tokenStore";
+import { useAuth } from "@/context/AuthContext";
 
 const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
   { name: "Overview", href: "/", icon: LayoutDashboard },
-  { name: "Collaboration Lab", href: "/multi-agent", icon: Users },
+  { name: "Integrations", href: "/integrations", icon: Boxes },
+  { name: "Data Sources", href: "/data-sources", icon: Database },
   { name: "Command Console", href: "/console", icon: MessageSquare },
   { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
 ];
 
 const bottomNav = [
   { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Billing", href: "/billing", icon: Coins },
   { name: "Help", href: "/help", icon: HelpCircle },
 ];
 
@@ -27,12 +31,40 @@ export function AppSidebar() {
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
+  const totalTokens = useTokenStore((state) => state.totalTokens);
+  const tokensLastUpdated = useTokenStore((state) => state.lastUpdated);
+  const setTokenUsage = useTokenStore((state) => state.setUsage);
+  const { user } = useAuth();
+  const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
+
+  useEffect(() => {
+    if (overview?.tokenUsage) {
+      setTokenUsage(overview.tokenUsage);
+    }
+  }, [overview, setTokenUsage]);
+
+  useQuery({
+    queryKey: ["usage", "summary", orgId],
+    queryFn: () => api.fetchUsageSummary(orgId as string),
+    enabled: Boolean(orgId),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    onSuccess: (summary) => {
+      if (summary?.total_tokens !== undefined) {
+        setTokenUsage({
+          total: Number(summary.total_tokens) || 0,
+          byAgent: {},
+        });
+      }
+    },
+  });
 
   const usage = useMemo(() => {
     if (!overview) {
       return {
         agents: "–",
         tasks: "–",
+        tokens: totalTokens.toLocaleString(),
         uptime: "",
       };
     }
@@ -44,18 +76,33 @@ export function AppSidebar() {
     return {
       agents: `${overview.agentCount}`,
       tasks: `${overview.taskCounts.total}`,
+      tokens: totalTokens.toLocaleString(),
       uptime,
     };
-  }, [overview]);
+  }, [overview, totalTokens]);
+
+  const profile = useMemo(() => {
+    if (!user) {
+      return null;
+    }
+    const name =
+      (user.user_metadata?.full_name as string | undefined)?.trim() ||
+      user.email ||
+      "Atlas Operator";
+    const email = user.email ?? "";
+    return { name, email };
+  }, [user]);
 
   return (
-    <div className="flex h-screen w-64 flex-col bg-sidebar">
+    <div className="flex h-screen w-64 flex-shrink-0 flex-col bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 items-center px-6">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded flex items-center justify-center">
-            <div className="w-6 h-6 rounded bg-foreground" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="Atlas Forge logo"
+            className="h-8 w-8 rounded-md object-cover shadow-sm"
+          />
           <span className="text-xl font-semibold text-foreground">Atlas Forge</span>
         </div>
       </div>
@@ -114,9 +161,21 @@ export function AppSidebar() {
             <span className="text-muted-foreground">Tasks</span>
             <span className="text-foreground">{usage.tasks}</span>
           </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Tokens</span>
+            <span className="text-foreground">
+              {tokensLastUpdated ? usage.tokens : "Tracking…"}
+            </span>
+          </div>
         </div>
         {usage.uptime && (
           <div className="text-xs text-muted-foreground">Uptime {usage.uptime}</div>
+        )}
+        {profile && (
+          <div className="mt-4 rounded-xl border border-sidebar-border bg-sidebar-accent/30 p-3">
+            <div className="mt-2 text-sm font-medium text-foreground">{profile.name}</div>
+            <div className="text-xs text-muted-foreground">{profile.email}</div>
+          </div>
         )}
       </div>
     </div>

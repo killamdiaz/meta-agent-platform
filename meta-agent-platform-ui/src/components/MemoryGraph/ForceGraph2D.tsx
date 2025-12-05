@@ -26,6 +26,7 @@ function hashToUnit(value: string, salt = "") {
 function computeBrainTarget(node: GraphNodeType, index: number, total: number) {
   const baseRadiusByType: Record<GraphNodeType["type"], number> = {
     agent: 110,
+    integration: 80,
     document: 160,
     memory: 210,
   } as const;
@@ -67,6 +68,19 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const selectedMetadataRecord = selectedNode?.metadata as Record<string, unknown> | undefined;
+  const selectedMemoryType =
+    selectedNode?.type === "memory"
+      ? (selectedMetadataRecord?.memoryType as "short_term" | "long_term" | undefined)
+      : undefined;
+  const selectedMemoryExpiresAt =
+    selectedNode?.type === "memory" && typeof selectedMetadataRecord?.expiresAt === "string"
+      ? (selectedMetadataRecord?.expiresAt as string)
+      : null;
+  const selectedRetention =
+    selectedNode?.type === "memory" && selectedMetadataRecord
+      ? ((selectedMetadataRecord["retention"] ?? {}) as { reason?: unknown })
+      : undefined;
 
   const sanitizedData = useMemo(() => {
     const total = Math.max(1, data.nodes.length);
@@ -103,7 +117,35 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       .filter((link) => link._sourceId !== link._targetId && nodeIds.has(link._sourceId) && nodeIds.has(link._targetId))
       .map(({ _sourceId, _targetId, ...link }) => link);
 
-    return { nodes, links };
+    const agentIds = nodes.filter((node) => node.type === "agent" || node.type === "integration").map((node) => node.id);
+    const nonAgentNodes = nodes.filter((node) => node.type !== "agent" && node.type !== "integration").map((node) => node.id);
+
+    const linkSet = new Set<string>();
+    links.forEach((link) => {
+      const key = `${link.source}→${link.target}`;
+      const reverseKey = `${link.target}→${link.source}`;
+      linkSet.add(key);
+      linkSet.add(reverseKey);
+    });
+
+    const augmentedLinks = [...links];
+    for (const targetId of nonAgentNodes) {
+      for (const agentId of agentIds) {
+        const key = `${agentId}→${targetId}`;
+        if (!linkSet.has(key)) {
+          augmentedLinks.push({
+            source: agentId,
+            target: targetId,
+            relation: "shared" as const,
+            strength: 0.4,
+          });
+          linkSet.add(key);
+          linkSet.add(`${targetId}→${agentId}`);
+        }
+      }
+    }
+
+    return { nodes, links: augmentedLinks };
   }, [data]);
 
   useEffect(() => {
@@ -276,7 +318,17 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       case "agent": {
         return "#ffffff";
       }
+      case "integration": {
+        return "#f97316";
+      }
       case "memory": {
+        const memoryType = node.metadata?.memoryType;
+        if (memoryType === "short_term") {
+          return "#38bdf8";
+        }
+        if (memoryType === "long_term") {
+          return "#14b8a6";
+        }
         const createdBy = node.metadata?.createdBy;
         const agentColor = createdBy ? agentColors.get(createdBy) : undefined;
         return agentColor ? withAlpha(agentColor, 0.75) : "#3b82f6";
@@ -288,6 +340,7 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
 
   const getNodeSize = (node: GraphNodeType) => {
     if (node.type === "agent") return 3.8;
+    if (node.type === "integration") return 4.4;
     if (node.type === "document") return 2.8;
     return 2.4;
   };
@@ -473,6 +526,34 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
                     selectedNode.metadata?.createdBy}
                 </span>
               </div>
+            )}
+            {selectedNode.type === "memory" && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Memory type:</span>
+                  <span className="text-foreground capitalize">
+                    {selectedMemoryType === "short_term"
+                      ? "Short-term"
+                      : selectedMemoryType === "long_term"
+                      ? "Long-term"
+                      : "Unknown"}
+                  </span>
+                </div>
+                {selectedMemoryExpiresAt && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expires:</span>
+                    <span className="text-foreground">
+                      {new Date(selectedMemoryExpiresAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {selectedRetention?.reason && typeof selectedRetention.reason === "string" && (
+                  <div>
+                    <span className="text-muted-foreground block">Retention logic:</span>
+                    <span className="text-foreground italic">{selectedRetention.reason}</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </Card>

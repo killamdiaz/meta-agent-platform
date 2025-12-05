@@ -1,0 +1,9 @@
+{
+  "name": "notion-knowledge-agent",
+  "description": "Synchronizes knowledge into Notion, enriching content with summaries and tags.",
+  "role": "Knowledge Curator",
+  "privilegeLevel": "tool",
+  "capabilities": ["read", "summarize", "create", "update"],
+  "safeActions": ["TASK", "RESULT"],
+  "commandScope": []
+}

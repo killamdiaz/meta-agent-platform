@@ -1,855 +1,675 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, Mic, Sparkles, Loader2, X, Trash2, Clock } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Plus, Mic, Sparkles, Ticket as TicketIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { api, apiBaseUrl } from "@/lib/api";
-import type { AgentRecord, CommandResponse, TaskRecord } from "@/types/api";
-import { useToast } from "@/components/ui/use-toast";
-import { useCommandHistory, type HistoryMessage } from "@/hooks/useCommandHistory";
+import TicketDrawer from "@/components/Console/TicketDrawer";
+import { type Ticket as TicketType } from "@/data/mockTickets";
+import { cn } from "@/lib/utils";
+import { API_BASE } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { getIssueDetails, type JiraIssueDetails } from "@/hooks/useJiraIssue";
+import type { SimilarIssue } from "@/types/jira";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-type MessageRole = "user" | "assistant" | "system";
-
-interface Message {
-  id: string;
-  createdAt: string;
-  role: MessageRole;
+type Message = {
+  role: "user" | "assistant";
   content: string;
-  taskId?: string;
-  status?: TaskRecord["status"];
-  agentId?: string;
-  agentName?: string;
-  streamContent?: string;
-  streamingState?: "streaming" | "complete";
-}
-
-const createMessageId = () => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const createMessage = (payload: Omit<Message, "id" | "createdAt">): Message => ({
-  id: createMessageId(),
-  createdAt: new Date().toISOString(),
-  ...payload,
-});
-
-const getDisplayValue = (message: Message) => (message.streamContent ?? message.content ?? "").trim();
-
-const formatRelativeTimestamp = (iso: string) => {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return "";
+const cleanDescription = (raw: unknown) => {
+  if (!raw) return "";
+  if (typeof raw === "string") return raw.replace(/<[^>]+>/g, "").trim();
+  if (typeof raw === "object" && raw !== null && "content" in raw) {
+    try {
+      const blocks = (raw as any).content as Array<{ content?: Array<{ text?: string }> }>;
+      return blocks
+        .map((block) => block.content?.map((c) => c.text).filter(Boolean).join(" ") ?? "")
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    } catch {
+      return "";
+    }
   }
-  const diffMs = Date.now() - date.getTime();
-  const minutes = Math.round(diffMs / 60000);
-  if (minutes <= 0) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return "";
 };
 
-const serializeMessageForHistory = (message: Message): HistoryMessage => ({
-  messageId: message.id,
-  role: message.role,
-  content: (message.streamContent ?? message.content ?? "").trim(),
-  agentId: message.agentId,
-  agentName: message.agentName,
-  status: message.status ?? null,
-  taskId: message.taskId ?? null,
-  createdAt: message.createdAt,
-});
+const mapIssueToTicket = (issue: Record<string, unknown> | null | undefined): TicketType | null => {
+  if (!issue) return null;
+  const fields = (issue as any).fields || {};
+  const statusName = String(fields.status?.name ?? "").toLowerCase();
+  const status: TicketType["status"] =
+    statusName.includes("done") || statusName.includes("resolved") || statusName.includes("closed")
+      ? "closed"
+      : statusName.includes("progress")
+      ? "in-progress"
+      : "open";
+  const priorityName = String(fields.priority?.name ?? "").toLowerCase();
+  const priority: TicketType["priority"] =
+    priorityName.includes("highest") || priorityName.includes("blocker") || priorityName.includes("critical")
+      ? "P1"
+      : priorityName.includes("high") || priorityName.includes("major")
+      ? "P2"
+      : priorityName.includes("medium")
+      ? "P3"
+      : "P4";
 
-const deserializeHistoryMessage = (entry: HistoryMessage): Message => ({
-  id: entry.messageId && entry.messageId.trim().length > 0 ? entry.messageId : createMessageId(),
-  createdAt: entry.createdAt ?? new Date().toISOString(),
-  role: entry.role,
-  content: entry.content,
-  agentId: entry.agentId ?? undefined,
-  agentName: entry.agentName ?? undefined,
-  status: (entry.status as TaskRecord["status"]) ?? undefined,
-  taskId: entry.taskId ?? undefined,
-});
+  const descriptionRaw = issue.renderedFields?.description ?? fields.description;
+  const description = cleanDescription(descriptionRaw);
+  const reporter = fields.assignee?.displayName || fields.reporter?.displayName || "Unassigned";
+  const createdAt = fields.created || new Date().toISOString();
+  const comments = (fields.comment?.comments || []).map((c: any) => ({
+    author: c.author?.displayName,
+    body: cleanDescription(c.body ?? c.renderedBody ?? ""),
+    created: c.created,
+  }));
 
-function findAgentByIdentifier(agents: AgentRecord[], identifier: string) {
-  const lowered = identifier.toLowerCase();
-  return (
-    agents.find((agent) => agent.id === identifier) ||
-    agents.find((agent) => agent.name.toLowerCase() === lowered)
-  );
-}
-
-function autoSelectAgent(agents: AgentRecord[], text: string) {
-  const lowered = text.toLowerCase();
-  return (
-    agents.find((agent) => lowered.includes(agent.name.toLowerCase())) ||
-    agents.find((agent) => lowered.includes(agent.role.toLowerCase())) ||
-    agents[0]
-  );
-}
-
-function buildCommand(raw: string, agents: AgentRecord[]): { command: string; routedAgent?: AgentRecord } {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error("Command cannot be empty");
-  }
-
-  if (trimmed.startsWith("/")) {
-    return { command: trimmed };
-  }
-
-  if (trimmed.startsWith("@")) {
-    const parts = trimmed.slice(1).split(/\s+/);
-    const identifier = parts.shift() ?? "";
-    const remainder = parts.join(" ");
-    const agent = findAgentByIdentifier(agents, identifier);
-    if (!agent) {
-      throw new Error(`Agent ${identifier} not found`);
-    }
-    return {
-      command: `/run ${agent.id} "${remainder || `Run command for ${agent.name}`}"`,
-      routedAgent: agent,
-    };
-  }
-
-  const mentionMatch = trimmed.match(/(?:^|\s)@([\w-]+)/);
-  if (mentionMatch) {
-    const agent = findAgentByIdentifier(agents, mentionMatch[1]);
-    if (!agent) {
-      throw new Error(`Agent ${mentionMatch[1]} not found`);
-    }
-    const remainder = trimmed.replace(mentionMatch[0], "").trim();
-    return {
-      command: `/run ${agent.id} "${remainder || `Run command for ${agent.name}`}"`,
-      routedAgent: agent,
-    };
-  }
-
-  if (agents.length === 0) {
-    throw new Error("No agents are available to handle this request");
-  }
-
-  const routedAgent = autoSelectAgent(agents, trimmed);
   return {
-    command: `/run ${routedAgent.id} "${trimmed}"`,
-    routedAgent,
+    id: issue.id || issue.key || fields.id || fields.key || `jira-${Math.random().toString(36).slice(2)}`,
+    key: issue.key || fields.key || "JIRA",
+    title: fields.summary || issue.key || "Jira issue",
+    description,
+    priority,
+    status,
+    reporter,
+    createdAt,
+    source: fields.project?.name || "Jira",
+    comments,
   };
-}
-
-function describeResponse(response: CommandResponse): string {
-  if (response.task && response.agent) {
-    if (response.task.status === "pending") {
-      return "";
-    }
-    return `${response.message ?? "Task enqueued"} for ${response.agent.name}. Status: ${response.task.status}`;
-  }
-  if (response.agent && response.message) {
-    return `${response.message} (${response.agent.name})`;
-  }
-  return response.message ?? "Command executed.";
-}
-
-function formatTaskMessage(agentName: string | undefined, task: TaskRecord): string {
-  const name = agentName ?? "Agent";
-  switch (task.status) {
-    case "pending":
-      return "";
-    case "working":
-      return "";
-    case "completed": {
-      const result = task.result as
-        | {
-            thought?: unknown;
-            action?: { summary?: unknown };
-            message?: unknown;
-          }
-        | string
-        | null
-        | undefined;
-
-      if (typeof result === "string") {
-        return `${name} completed the task:\n\n${result}`;
-      }
-
-      if (result && typeof result === "object") {
-        const thought = typeof result.thought === "string" ? result.thought.trim() : "";
-        const message = typeof result.message === "string" ? result.message.trim() : "";
-        const parts = [thought, message].filter((part) => part && part.length > 0);
-        if (parts.length > 0) {
-          return parts.join("\n\n");
-        }
-        return "";
-      }
-
-      return "";
-    }
-    case "error": {
-      const result = task.result as { message?: unknown } | string | null | undefined;
-      if (typeof result === "string") {
-        return `Task for ${name} failed: ${result}`;
-      }
-      if (result && typeof result === "object" && typeof result.message === "string") {
-        return `Task for ${name} failed: ${result.message}`;
-      }
-      return `Task for ${name} failed.`;
-    }
-    default:
-      return `${name} reported status: ${task.status}`;
-  }
-}
-
-type TaskStreamPayload =
-  | {
-      type: "status";
-      status: TaskRecord["status"];
-      task: TaskRecord;
-      agent?: AgentRecord;
-    }
-  | {
-      type: "token";
-      token: string;
-      agent?: AgentRecord;
-    }
-  | {
-      type: "log";
-      message: string;
-      detail?: Record<string, unknown>;
-      agent?: AgentRecord;
-    }
-  | {
-      type: "complete";
-      status: "completed";
-      task: TaskRecord;
-      agent?: AgentRecord;
-    }
-  | {
-      type: "error";
-      status: "error";
-      message: string;
-      task?: TaskRecord;
-      agent?: AgentRecord;
-    };
+};
 
 export default function CommandConsole() {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const taskStreams = useRef<Map<string, EventSource>>(new Map());
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [showTicketView, setShowTicketView] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState<TicketType | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<TicketType[]>([]);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [issueDetails, setIssueDetails] = useState<Record<string, JiraIssueDetails>>({});
+  const [similarIssues, setSimilarIssues] = useState<Record<string, SimilarIssue[]>>({});
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const agents = [
+    { id: "core", name: "Atlas Core" },
+    { id: "diagnosis", name: "Diagnosis Engine" },
+    { id: "analysis", name: "Analysis Agent" },
+  ];
+  const statusStages = [
+    "Analyzing issue…",
+    "Searching KB for relevant documentation…",
+    "Searching for similar solved Jira tickets…",
+    "Compiling diagnosis…",
+  ];
+  const [mentionCandidates, setMentionCandidates] = useState(agents);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const { sessions, currentSessionId, createSession, selectSession, deleteSession, updateSessionMessages } =
-    useCommandHistory();
-  const historyHydrationRef = useRef(false);
-  const hydratedSessionRef = useRef<string | null>(null);
+  const pendingCount = tickets.filter((t) => t.status === "open" || t.status === "in-progress").length;
+  const closedCount = tickets.filter((t) => t.status === "closed").length;
+  const formatContent = (text: string) =>
+    text
+      // Space around any markdown header
+      .replace(/(#+\s*[^\n]+)/g, "\n\n$1\n\n")
+      // Space around horizontal rules
+      .replace(/---/g, "\n\n---\n\n")
+      // Ensure list items have space before them
+      .replace(/(\n)(\d+\.|\-)\s/g, "\n$2 ")
+      // Fix accidental triple newlines
+      .replace(/(\n){3,}/g, "\n\n")
+      // Trim edges
+      .trim();
+  const formatAssistantMarkdown = (text: string) =>
+    text
+      .replace(/(\S)(#+\s)/g, "$1\n$2")
+      .replace(/(\S)(\n?\d+\.\s)/g, "$1\n$2")
+      .replace(/(\S)(\n?-\s)/g, "$1\n$2")
+      .replace(/(\n){3,}/g, "\n\n")
+      .trim();
 
-  const currentSession = useMemo(
-    () => sessions.find((session) => session.id === currentSessionId) ?? null,
-    [sessions, currentSessionId],
-  );
-
-  const ensureSession = useCallback(() => {
-    if (currentSessionId) {
-      return currentSessionId;
+  const fetchIssues = useCallback(async () => {
+    setTicketsLoading(true);
+    try {
+      const storedToken =
+        localStorage.getItem("access_token") ||
+        localStorage.getItem("sb-access-token") ||
+        localStorage.getItem("sb-auth-token");
+      const headers: Record<string, string> = {};
+      if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+      if (user?.id) headers["x-account-id"] = user.id;
+      const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+      if (orgId) headers["x-org-id"] = orgId;
+      const license = localStorage.getItem("forge_license_key");
+      if (license) headers["x-license-key"] = license;
+      const res = await fetch(`${API_BASE}/connectors/jira/api/issues/assigned`, {
+        headers,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        if (res.status === 404 || res.status === 400) {
+          setTickets([]);
+          return;
+        }
+        const text = await res.text();
+        throw new Error(`Failed to load Jira issues: ${res.statusText || text || "unknown"}`);
+      }
+      const data = await res.json();
+      const mapped = Array.isArray(data?.issues)
+        ? (data.issues.map(mapIssueToTicket).filter(Boolean) as TicketType[])
+        : [];
+      setTickets(mapped);
+    } catch (error) {
+      console.error("[console] failed to load Jira issues", error);
+    } finally {
+      setTicketsLoading(false);
     }
-    return createSession();
-  }, [currentSessionId, createSession]);
-
-  const closeTaskStream = useCallback((taskId: string) => {
-    const source = taskStreams.current.get(taskId);
-    if (source) {
-      source.close();
-      taskStreams.current.delete(taskId);
-    }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (!currentSessionId) {
-      hydratedSessionRef.current = null;
-      if (messages.length > 0) {
-        setMessages([]);
-      }
-      return;
-    }
-    if (hydratedSessionRef.current === currentSessionId) {
-      return;
-    }
-    const session = sessions.find((item) => item.id === currentSessionId);
-    if (!session) {
-      hydratedSessionRef.current = null;
-      historyHydrationRef.current = false;
-      setMessages([]);
-      return;
-    }
-    hydratedSessionRef.current = currentSessionId;
-    historyHydrationRef.current = true;
-    const restored = session.messages.map((entry) => deserializeHistoryMessage(entry));
-    setMessages(restored);
-    const timeout =
-      typeof window !== "undefined"
-        ? window.setTimeout(() => {
-            historyHydrationRef.current = false;
-          }, 0)
-        : null;
-    return () => {
-      if (timeout && typeof window !== "undefined") {
-        window.clearTimeout(timeout);
-      }
-      historyHydrationRef.current = false;
-    };
-  }, [currentSessionId, sessions]);
-
-  useEffect(() => {
-    if (!currentSessionId) return;
-    if (historyHydrationRef.current) return;
-    if (hydratedSessionRef.current !== currentSessionId) return;
-    const serialized = messages.map((message) => serializeMessageForHistory(message));
-    updateSessionMessages(currentSessionId, serialized);
-  }, [messages, currentSessionId, updateSessionMessages]);
-
-  useEffect(() => {
-    taskStreams.current.forEach((source) => source.close());
-    taskStreams.current.clear();
-  }, [currentSessionId]);
-
-  const handleTaskStreamEvent = useCallback(
-    (taskId: string, payload: TaskStreamPayload) => {
-      setMessages((prev) =>
-        prev.map((message) => {
-          if (message.taskId !== taskId) {
-            return message;
-          }
-          const next: Message = { ...message };
-
-          if (payload.agent) {
-            next.agentId = payload.agent.id;
-            next.agentName = payload.agent.name;
-          }
-
-          switch (payload.type) {
-            case "token": {
-              const combined = `${next.streamContent ?? ""}${payload.token}`;
-              next.streamContent = combined;
-              next.status = "working";
-              next.streamingState = "streaming";
-              return next;
-            }
-            case "log": {
-              const progressLine = payload.message.trim();
-              const appended = progressLine ? `${progressLine}\n` : "";
-              const combined = `${next.streamContent ?? ""}${appended}`;
-              next.streamContent = combined;
-              next.status = next.status ?? "working";
-              next.streamingState = "streaming";
-              next.content = combined || next.content;
-              return next;
-            }
-            case "status": {
-              next.status = payload.status;
-              if (payload.task) {
-                next.content = formatTaskMessage(next.agentName ?? payload.agent?.name, payload.task);
-              }
-              next.streamingState = "streaming";
-              return next;
-            }
-            case "complete": {
-              const task = payload.task;
-              next.status = payload.status;
-              if (task) {
-                next.content = formatTaskMessage(next.agentName ?? payload.agent?.name, task);
-              } else if (next.streamContent) {
-                next.content = next.streamContent;
-              }
-              next.streamContent = undefined;
-              next.streamingState = "complete";
-              return next;
-            }
-            case "error": {
-              const errorTask = payload.task;
-              next.status = payload.status;
-              const messageText = typeof payload.message === "string" ? payload.message : "Task failed.";
-              const agentDisplay = next.agentName ?? payload.agent?.name ?? "agent";
-              next.content = `Task for ${agentDisplay} failed: ${messageText}`;
-              next.streamContent = undefined;
-              next.streamingState = "complete";
-              return next;
-            }
-            default:
-              return next;
-          }
-        }),
-      );
-    },
-    [],
-  );
-
-  const startTaskStream = useCallback(
-    (taskId: string) => {
-      if (!taskId || taskStreams.current.has(taskId)) {
-        return;
-      }
-      if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-        return;
-      }
-      const path = `/tasks/${taskId}/stream`;
-      const url = apiBaseUrl ? `${apiBaseUrl}${path}` : path;
-      const source = new window.EventSource(url);
-      taskStreams.current.set(taskId, source);
-
-      source.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as TaskStreamPayload;
-          handleTaskStreamEvent(taskId, data);
-          if (data.type === "complete" || data.type === "error") {
-            closeTaskStream(taskId);
-          }
-        } catch (error) {
-          console.error("Failed to parse task stream event", error);
-        }
-      };
-
-      source.onerror = () => {
-        closeTaskStream(taskId);
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.taskId === taskId
-              ? {
-                  ...message,
-                  streamingState: "complete",
-                }
-              : message,
-          ),
-        );
-      };
-    },
-    [closeTaskStream, handleTaskStreamEvent],
-  );
-
-  useEffect(
-    () => () => {
-      taskStreams.current.forEach((source) => source.close());
-      taskStreams.current.clear();
-    },
-    [],
-  );
-
-  const { data: agents = [] } = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => api.listAgents(),
-    select: (res) => res.items,
-    refetchInterval: 20_000,
-  });
-
-  const commandMutation = useMutation({
-    mutationFn: (command: string) => api.runCommand(command),
-    onSuccess: (response) => {
-      setMessages((prev) => [
-        ...prev,
-        createMessage({
-          role: "assistant",
-          content: describeResponse(response),
-          taskId: response.task?.id,
-          status: response.task?.status,
-          agentId: response.agent?.id,
-          agentName: response.agent?.name,
-          streamingState: response.task ? "streaming" : undefined,
-        }),
-      ]);
-      if (response.task?.id) {
-        startTaskStream(response.task.id);
-      }
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-    },
-    onError: (error: Error) => {
-      setMessages((prev) => [
-        ...prev,
-        createMessage({ role: "system", content: `Error: ${error.message}` }),
-      ]);
-      toast({ title: "Command failed", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const streamingTaskIds = useMemo(
-    () =>
-      messages
-        .filter((message) => message.taskId && message.streamingState === "streaming")
-        .map((message) => message.taskId!),
-    [messages],
-  );
-
-  const pollTaskIds = useMemo(
-    () =>
-      messages
-        .filter(
-          (message) =>
-            message.taskId &&
-            message.streamingState !== "streaming" &&
-            !["completed", "error"].includes(message.status ?? "pending"),
-        )
-        .map((message) => message.taskId!),
-    [messages],
-  );
-
-  const { data: tasksData } = useQuery({
-    queryKey: ["tasks"],
-    queryFn: () => api.listTasks(),
-    enabled: pollTaskIds.length > 0,
-    refetchInterval: pollTaskIds.length > 0 ? 2_000 : false,
-  });
-
-  useEffect(() => {
-    if (!tasksData) return;
-    setMessages((prev) =>
-      prev.map((message) => {
-        if (!message.taskId || message.streamingState === "streaming") {
-          return message;
-        }
-        const task = tasksData.items.find((item) => item.id === message.taskId);
-        if (!task) {
-          return message;
-        }
-        const updatedContent = formatTaskMessage(message.agentName, task);
-        if (updatedContent === message.content && task.status === message.status) {
-          return message;
-        }
-        return {
-          ...message,
-          content: updatedContent,
-          status: task.status,
-        };
-      }),
-    );
-  }, [tasksData]);
-
-  const isTyping = commandMutation.isPending || streamingTaskIds.length > 0 || pollTaskIds.length > 0;
-
-  const activeAgentName = useMemo(() => {
-    const streamingMessage = messages.find((message) => message.streamingState === "streaming");
-    if (streamingMessage?.agentName) {
-      return streamingMessage.agentName;
-    }
-    const pendingMessage = messages.find(
-      (message) => message.taskId && !["completed", "error"].includes(message.status ?? "pending"),
-    );
-    return pendingMessage?.agentName;
-  }, [messages]);
-
-  const suggestions = useMemo(() => {
-    if (agents.length === 0) {
-      return [
-        "Create an agent that monitors onboarding emails",
-        "Generate a financial summary for this week",
-      ];
-    }
-    return agents.slice(0, 4).map((agent) => `@${agent.name} run a status update`);
-  }, [agents]);
+    void fetchIssues();
+  }, [fetchIssues]);
 
   const handleSend = async () => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
+    if (!input.trim()) return;
 
-    ensureSession();
-    const userMessage = createMessage({ role: "user", content: trimmed });
+    const needsZscalerKb = /\b(zscaler|zpa|zia|zdx|zs cloud|zero trust|z-tunnel|z tunnel|private access|internet access)\b/i.test(
+      input,
+    );
+    const history = messages
+      .filter((m) => m.content && m.content !== "__streaming__")
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+      .join("\n");
+    const kbInstruction = needsZscalerKb
+      ? "\n\nWhen the user mentions Zscaler, search the Zscaler KB, cite sources, and answer concisely."
+      : "\n\nAlways search the internal KB embeddings first and cite sources; if no relevant matches are found, fall back to LLM.";
+    const citationInstruction =
+      "\n\nCite sources inline using [source-name](url) and end with a bullet list under 'Sources:'; if no sources, explicitly say 'No sources found.'";
+    const payload = history
+      ? `${history}\nUser: ${input}${kbInstruction}${citationInstruction}`
+      : `${input}${kbInstruction}${citationInstruction}`;
+    const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
+    setInput("");
+    setIsTyping(true);
+
+    const body = JSON.stringify({ message: payload, conversationId: conversationId ?? undefined });
+    const controller = new AbortController();
 
     try {
-      const { command } = buildCommand(trimmed, agents);
-      await commandMutation.mutateAsync(command);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to process command";
-      setMessages((prev) => [...prev, createMessage({ role: "system", content: `Error: ${message}` })]);
-      toast({ title: "Unable to route message", description: message, variant: "destructive" });
+      const storedToken =
+        localStorage.getItem("access_token") ||
+        localStorage.getItem("sb-access-token") ||
+        localStorage.getItem("sb-auth-token");
+      const license = localStorage.getItem("forge_license_key");
+      const res = await fetch(`${API_BASE}/chat/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
+          ...(license ? { "x-license-key": license } : {}),
+        },
+        body,
+        signal: controller.signal,
+        credentials: "include",
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`Chat failed: ${res.statusText}`);
+      }
+
+      let buffer = "";
+      let assistantContent = "";
+      let hasAssistantMessage = false;
+
+      const reader = res.body.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += new TextDecoder().decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const chunk of parts) {
+          const lines = chunk.split("\n");
+          let event: string | null = null;
+          const dataLines: string[] = [];
+          for (const line of lines) {
+            if (line.startsWith("event:")) event = line.replace("event:", "").trim();
+            if (line.startsWith("data:")) dataLines.push(line.replace(/^data:\s?/, ""));
+          }
+          const data = dataLines.join("\n");
+          if (event === "token") {
+            assistantContent += data;
+            setMessages((prev) => {
+              if (!hasAssistantMessage) {
+                hasAssistantMessage = true;
+                return [...prev, { role: "assistant", content: assistantContent || "__streaming__" }];
+              }
+              if (!prev.length) {
+                return [{ role: "assistant", content: assistantContent || "__streaming__" }];
+              }
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (updated[lastIdx].role === "assistant") {
+                updated[lastIdx] = { ...updated[lastIdx], content: assistantContent || "__streaming__" };
+              } else {
+                updated.push({ role: "assistant", content: assistantContent || "__streaming__" });
+              }
+              return updated;
+            });
+          }
+          if (event === "done") {
+            try {
+              const payload = JSON.parse(data);
+              if (payload?.conversationId) setConversationId(payload.conversationId);
+              if (payload?.messageId) {
+                setMessages((prev) => {
+                  if (!prev.length) return [{ role: "assistant", content: assistantContent }];
+                  const updated = [...prev];
+                  const lastIdx = updated.length - 1;
+                  if (updated[lastIdx].role === "assistant") {
+                    updated[lastIdx] = { ...updated[lastIdx], content: assistantContent };
+                  } else {
+                    updated.push({ role: "assistant", content: assistantContent });
+                  }
+                  return updated;
+                });
+              }
+            } catch {
+              setMessages((prev) => {
+                if (!prev.length) return [{ role: "assistant", content: assistantContent }];
+                const updated = [...prev];
+                const lastIdx = updated.length - 1;
+                if (updated[lastIdx].role === "assistant") {
+                  updated[lastIdx] = { ...updated[lastIdx], content: assistantContent };
+                } else {
+                  updated.push({ role: "assistant", content: assistantContent });
+                }
+                return updated;
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, I hit an error responding." }]);
+      console.error(err);
     } finally {
-      setInput("");
+      setIsTyping(false);
     }
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (mentionQuery !== null && mentionCandidates.length) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        insertMention(mentionCandidates[mentionIndex]);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       handleSend();
     }
   };
 
-  const handleSelectSession = useCallback(
-    (sessionId: string) => {
-      hydratedSessionRef.current = null;
-      selectSession(sessionId);
-      setHistoryOpen(false);
-    },
-    [selectSession],
-  );
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInput(value);
+    const caret = e.target.selectionStart ?? value.length;
+    const textBeforeCaret = value.slice(0, caret);
+    const match = textBeforeCaret.match(/@([\w-]*)$/);
+    if (match) {
+      const query = match[1];
+      const filtered = agents.filter((agent) =>
+        `${agent.id} ${agent.name}`.toLowerCase().includes(query.toLowerCase()),
+      );
+      setMentionQuery(query);
+      setMentionCandidates(filtered);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+      setMentionCandidates(agents);
+    }
+  };
 
-  const handleNewChat = useCallback(() => {
-    hydratedSessionRef.current = null;
-    createSession();
-    setMessages([]);
-    setHistoryOpen(false);
-  }, [createSession]);
+  const insertMention = (agent: { id: string; name: string }) => {
+    const mentionText = `@${agent.id}`;
+    setInput((prev) => {
+      const caret = inputRef.current?.selectionStart ?? prev.length;
+      const before = prev.slice(0, caret);
+      const after = prev.slice(caret);
+      const match = before.match(/@[\w-]*$/);
+      const start = match ? caret - match[0].length : caret;
+      const newValue = `${prev.slice(0, start)}${mentionText} ${after}`;
+      const nextCaret = start + mentionText.length + 1;
+      requestAnimationFrame(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.setSelectionRange(nextCaret, nextCaret);
+        }
+      });
+      return newValue;
+    });
+    setMentionQuery(null);
+    setMentionCandidates(agents);
+    setMentionIndex(0);
+  };
 
-  const handleDeleteSession = useCallback(
-    (sessionId: string) => {
-      hydratedSessionRef.current = null;
-      deleteSession(sessionId);
-      if (sessionId === currentSessionId) {
+  const handleViewTickets = () => {
+    setShowTicketView(true);
+    void fetchIssues();
+    setMessages([
+      {
+        role: "assistant",
+        content: "I've loaded your Jira issues. Select one from the panel on the right to inspect it.",
+      },
+    ]);
+  };
+
+  const handleSelectTicket = async (ticket: TicketType) => {
+    setSelectedTicket(ticket);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        content: `Loading ${ticket.key}... fetching full details and similar issues.`,
+      },
+    ]);
+    const headers: Record<string, string> = {};
+    const storedToken =
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("sb-access-token") ||
+      localStorage.getItem("sb-auth-token");
+    if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+    const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+    if (orgId) headers["x-org-id"] = orgId;
+    if (user?.id) headers["x-account-id"] = user.id;
+    const license = localStorage.getItem("forge_license_key");
+    if (license) headers["x-license-key"] = license;
+    try {
+      const issue = await getIssueDetails(ticket.key, headers);
+      setIssueDetails((prev) => ({ ...prev, [ticket.key]: issue }));
+
+      const body = JSON.stringify({
+        projectKey: issue.key?.split("-")?.[0],
+        summary: issue.summary,
+        description: issue.descriptionHtml,
+        limit: 5,
+      });
+      try {
+        const res = await fetch(`${API_BASE}/connectors/jira/api/issues/similar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          credentials: "include",
+          body,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: data.items ?? [] }));
+        } else {
+          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+        }
+      } catch (err) {
+        console.error("[console] failed to load similar issues", err);
+        setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+      }
+
+      const descText = issue.descriptionHtml ? cleanDescription(issue.descriptionHtml) : ticket.description;
+      setMessages((prev) => [
+        ...prev.filter((m) => !m.content.startsWith("Loading ")),
+        {
+          role: "assistant",
+          content: `**${ticket.key}: ${issue.summary || ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${descText}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+        },
+      ]);
+    } catch (err) {
+      console.error("[console] failed to load issue details", err);
+      setMessages((prev) => [
+        ...prev.filter((m) => !m.content.startsWith("Loading ")),
+        {
+          role: "assistant",
+          content: `**${ticket.key}: ${ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${ticket.description || "Description not available."}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+        },
+      ]);
+    }
+  };
+
+  useEffect(() => {
+    if (!conversationId) return;
+    localStorage.setItem(`atlas-chat-${conversationId}`, JSON.stringify(messages));
+  }, [messages, conversationId]);
+
+  useEffect(() => {
+    const lastConversationId = localStorage.getItem("atlas-last-conversation-id");
+    if (lastConversationId) {
+      setConversationId(lastConversationId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    localStorage.setItem("atlas-last-conversation-id", conversationId);
+    const stored = localStorage.getItem(`atlas-chat-${conversationId}`);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setMessages(parsed);
+        }
+      } catch {
         setMessages([]);
       }
-    },
-    [deleteSession, currentSessionId],
+    } else {
+      setMessages((prev) => (prev.length ? prev : []));
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const renderWelcome = () => (
+    <div className="flex flex-col items-center justify-center h-full space-y-6 animate-fade-in">
+      <div className="flex items-center gap-2">
+        <Sparkles className="w-8 h-8 text-atlas-glow" />
+      </div>
+      <div className="text-center space-y-1">
+        <h1 className="text-4xl font-normal">
+          <span className="text-atlas-glow">Hello, Founder</span>
+        </h1>
+        <p className="text-3xl font-normal text-muted-foreground/80">What should we build today?</p>
+      </div>
+
+      <div className="flex items-center gap-6 mt-6">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-semibold text-red-400">{pendingCount}</span>
+          <span className="text-sm text-muted-foreground">Pending tickets</span>
+        </div>
+        <div className="w-px h-6 bg-border" />
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-semibold text-blue-400">{closedCount}</span>
+          <span className="text-sm text-muted-foreground">Closed tickets</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 mt-4">
+        <button
+          onClick={handleViewTickets}
+          className="flex items-center gap-2 px-5 py-3 text-sm border border-border rounded-xl hover:border-atlas-glow/50 hover:bg-muted/30 transition-all"
+        >
+          <TicketIcon className="w-4 h-4" />
+          View my tickets
+        </button>
+        <button className="flex items-center gap-2 px-5 py-3 text-sm border border-border rounded-xl hover:border-atlas-glow/50 hover:bg-muted/30 transition-all">
+          <Sparkles className="w-4 h-4" />
+          Create new agent
+        </button>
+      </div>
+    </div>
   );
 
-  const currentTitle = currentSession?.title ?? "New conversation";
-
-  return (
-    <div className="relative flex h-screen">
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 w-80 border-r border-border/60 bg-background/95 backdrop-blur-xl transition-transform duration-300 ${
-          historyOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-border/60">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Chat history</span>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-            onClick={() => setHistoryOpen(false)}
-            aria-label="Close chat history"
+  const renderMessages = () => (
+    <div className="max-w-3xl mx-auto space-y-6">
+      {messages.map((message, i) => (
+        <div key={i} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}>
+          <div
+            className={cn(
+              "max-w-[80%] whitespace-pre-wrap",
+              message.role === "user"
+                ? "rounded-2xl px-4 py-3 bg-atlas-glow/20 text-foreground ml-auto"
+                : "text-foreground prose prose-invert max-w-none",
+            )}
           >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <Button
-            onClick={handleNewChat}
-            variant="outline"
-            className="w-full justify-start gap-2 border-border/70 text-sm text-foreground"
-          >
-            <Plus className="h-4 w-4" />
-            <span>New chat</span>
-          </Button>
-          <div className="space-y-2">
-            {sessions.length === 0 ? (
-              <div className="rounded-xl border border-border/70 px-4 py-6 text-sm text-muted-foreground/80">
-                No conversations yet. Start a new chat to see it here.
-              </div>
+            {message.role === "assistant" ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node, ...props }) => (
+                    <a className="text-blue-400 underline" target="_blank" rel="noreferrer" {...props} />
+                  ),
+                  ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1" {...props} />,
+                  ol: ({ node, ...props }) => <ol className="list-decimal pl-4 space-y-1" {...props} />,
+                }}
+              >
+                {formatAssistantMarkdown(message.content)}
+              </ReactMarkdown>
             ) : (
-              sessions.map((session) => {
-                const isActive = session.id === currentSessionId;
-                return (
-                  <div key={session.id} className="group relative">
-                    <button
-                      onClick={() => handleSelectSession(session.id)}
-                      className={`w-full rounded-xl border px-4 py-3 text-left transition ${
-                        isActive
-                          ? "border-atlas-glow/60 bg-muted/40 text-foreground"
-                          : "border-border/70 bg-background/80 text-foreground hover:border-border hover:bg-muted/30"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1">
-                          <div className="text-sm font-medium leading-snug line-clamp-2">{session.title}</div>
-                          <div className="mt-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                            <Clock className="h-3 w-3" />
-                            <span>{formatRelativeTimestamp(session.updatedAt)}</span>
-                          </div>
-                        </div>
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                          {session.messages.length} msgs
-                        </span>
-                      </div>
-                    </button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="Delete conversation"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDeleteSession(session.id);
-                      }}
-                      className="absolute right-2 top-2 h-8 w-8 opacity-0 transition group-hover:opacity-100 text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                );
-              })
+              formatContent(message.content)
             )}
           </div>
         </div>
-      </aside>
-      {historyOpen && (
-        <button
-          type="button"
-          className="fixed inset-0 z-30 bg-background/40 backdrop-blur-sm"
-          onClick={() => setHistoryOpen(false)}
-          aria-label="Close chat history overlay"
-        />
-      )}
-      <div className="flex flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-9 w-9 text-muted-foreground hover:text-foreground"
-              onClick={() => setHistoryOpen((prev) => !prev)}
-              aria-label="Toggle chat history"
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-            <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Command Console</div>
-              <div className="text-sm font-medium text-foreground line-clamp-1">{currentTitle}</div>
+      ))}
+      {isTyping && (
+        <div className="flex justify-start animate-fade-in">
+          <div className="bg-muted rounded-2xl px-4 py-3 space-y-2">
+            <div className="flex gap-1">
+              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              {statusStages.map((stage, idx) => (
+                <div key={stage} className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-atlas-glow/70" />
+                  <span className={cn("transition-opacity", idx === statusStages.length - 1 ? "font-semibold text-foreground" : "")}>
+                    {stage}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2 border-border/70 text-sm"
-            onClick={handleNewChat}
-          >
-            <Plus className="h-4 w-4" />
-            New chat
-          </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-8">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full space-y-6 animate-fade-in">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-8 h-8 text-atlas-glow" />
-              </div>
-              <div className="text-center space-y-1">
-                <h1 className="text-4xl font-normal">
-                  <span className="text-atlas-glow">Hello, Founder</span>
-                </h1>
-                <p className="text-3xl font-normal text-muted-foreground/80">What should we build today?</p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-8 max-w-2xl">
-                {suggestions.map((suggestion) => (
+      )}
+    </div>
+  );
+
+  const renderInput = () => (
+    <div className="bg-background p-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[28px] hover:border-border transition-colors">
+          {mentionQuery !== null && (
+            <div className="absolute bottom-full left-5 mb-2 w-64 rounded-xl border border-border bg-card shadow-md overflow-hidden">
+              {mentionCandidates.length ? (
+                mentionCandidates.map((agent, idx) => (
                   <button
-                    key={suggestion}
-                    onClick={() => setInput(suggestion)}
-                    className="p-4 text-left text-sm border border-border rounded-xl hover:border-atlas-glow/50 hover:bg-muted/30 transition-all"
+                    key={agent.id}
+                    className={cn(
+                      "w-full text-left px-4 py-2 text-sm hover:bg-muted transition-colors",
+                      idx === mentionIndex && "bg-muted",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      insertMention(agent);
+                    }}
                   >
-                    {suggestion}
+                    {agent.name} ({agent.id})
                   </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto space-y-8">
-              {messages.map((message) => {
-                if (message.role === "user") {
-                  return (
-                    <div key={message.id} className="flex justify-end animate-fade-in">
-                      <div className="flex flex-col items-end space-y-2">
-                        <div className="text-xs font-medium uppercase tracking-wide text-atlas-glow">You</div>
-                        <div className="max-w-2xl rounded-2xl px-4 py-3 whitespace-pre-wrap bg-atlas-glow/20 text-foreground inline-block w-auto">
-                          {message.streamContent ?? message.content}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-
-                const displayValue = getDisplayValue(message);
-                if (!displayValue.trim()) {
-                  return null;
-                }
-
-                return (
-                  <div key={message.id} className="animate-fade-in space-y-2">
-                    <div
-                      className={`text-xs font-medium uppercase tracking-wide text-muted-foreground ${
-                        message.role === "system" ? "text-destructive" : ""
-                      }`}
-                    >
-                      {message.role === "assistant" ? message.agentName ?? "Atlas" : "System"}
-                    </div>
-                    <div
-                      className={`whitespace-pre-wrap leading-relaxed text-sm md:text-base ${
-                        message.role === "system" ? "text-destructive" : "text-foreground"
-                      }`}
-                    >
-                      {displayValue}
-                    </div>
-                  </div>
-                );
-              })}
-              {isTyping && (
-                <div className="animate-fade-in">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {activeAgentName ?? "Atlas"}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    {commandMutation.isPending
-                      ? "Processing command..."
-                      : activeAgentName
-                      ? `${activeAgentName} is working...`
-                      : "Processing command..."}
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  </div>
-                </div>
+                ))
+              ) : (
+                <div className="px-4 py-2 text-sm text-muted-foreground">No matches</div>
               )}
             </div>
           )}
-        </div>
-
-        <div className="bg-background p-6">
-          <div className="max-w-4xl mx-auto">
-            <div className="relative bg-card/40 backdrop-blur-sm border border-border/50 rounded-[28px] hover:border-border transition-colors">
-              <div className="flex items-center gap-3 px-5 py-4">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
-                  onClick={() => setInput((value) => `${value} /create `)}
-                  aria-label="Create agent"
-                >
-                  <Plus className="h-5 w-5" />
-                </Button>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={handleKeyPress}
-                  placeholder="Ask Atlas Core or route with @agent..."
-                  className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
-                  disabled={isTyping}
+          <div className="flex items-center gap-3 px-5 py-4">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+            >
+              <Plus className="h-5 w-5" />
+            </Button>
+            <input
+              type="text"
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask Atlas Core..."
+              ref={inputRef}
+              className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+            />
+            <button className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
                 />
-                <button
-                  className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted/50"
-                  type="button"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
-                    />
-                  </svg>
-                  <span>Tools</span>
-                </button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
-                  aria-label="Voice input"
-                >
-                  <Mic className="h-5 w-5" />
-                </Button>
-              </div>
-            </div>
+              </svg>
+              <span>Tools</span>
+            </button>
+            <Button size="icon" variant="ghost" className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9">
+              <Mic className="h-5 w-5" />
+            </Button>
           </div>
         </div>
       </div>
+    </div>
+  );
+
+  if (showTicketView) {
+    return (
+      <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto">
+        <div className="flex-[3] flex flex-col bg-card/30 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
+            {renderMessages()}
+          </div>
+          {renderInput()}
+        </div>
+        <div className="flex-1 min-w-[320px] max-w-[400px]">
+          <TicketDrawer
+            tickets={tickets}
+            selectedTicket={selectedTicket}
+            onSelectTicket={handleSelectTicket}
+            onClearSelection={() => setSelectedTicket(null)}
+            loading={ticketsLoading}
+            issueDetails={issueDetails}
+            similarIssues={similarIssues}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-screen">
+      <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
+        {messages.length === 0 ? renderWelcome() : renderMessages()}
+      </div>
+      {renderInput()}
     </div>
   );
 }

@@ -1,6 +1,5 @@
-import OpenAI from 'openai';
-import { config } from '../config.js';
 import { MemoryStore } from './MemoryStore.js';
+import { routeMessage } from '../llm/router.js';
 
 type AgentPurpose =
   | 'coordination'
@@ -46,6 +45,9 @@ interface ConversationContext {
   memoryStore: MemoryStore;
   messages: ConversationMessage[];
   hooks?: SessionHooks;
+  turnStats: Map<string, { count: number; consecutive: number; lastTimestamp: number }>;
+  turnSequence: string[];
+  shortTermBuffer: Map<string, string[]>;
 }
 
 interface AgentLLMResponse {
@@ -68,10 +70,7 @@ interface SessionHooks {
   onComplete?(result: SessionResult): void;
 }
 
-const DEFAULT_MODEL = 'gpt-4.1-mini';
 const MAX_TURNS = 14;
-
-const openai = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
 const agentPrompts: Partial<Record<AgentPurpose, string>> = {
   coordination:
@@ -146,7 +145,9 @@ const summariseMessages = (messages: ConversationMessage[], limit = 10) =>
     })
     .join('\n');
 
-const formatAgentMemory = (memoryStore: MemoryStore, agentId: string) => {
+const TASK_BUFFER_LIMIT = 8;
+
+const formatAgentMemory = (memoryStore: MemoryStore, agentId: string, taskBuffer: string[]) => {
   const snapshot = memoryStore.getSnapshot();
   const agentMemory = snapshot.agents[agentId] ?? { shortTerm: [], longTerm: [] };
   const shortTerm = agentMemory.shortTerm.slice(-6).join('\n• ');
@@ -156,8 +157,14 @@ const formatAgentMemory = (memoryStore: MemoryStore, agentId: string) => {
     .map((entry) => `${entry.content} (agents: ${entry.agentsInvolved.join(', ')})`)
     .join('\n• ');
 
+  const sessionShort = taskBuffer.slice(-TASK_BUFFER_LIMIT).join('\n• ');
+
   return {
-    shortTerm: shortTerm ? `• ${shortTerm}` : '• (none)',
+    shortTerm: sessionShort
+      ? `• ${sessionShort}`
+      : shortTerm
+      ? `• ${shortTerm}`
+      : '• (none)',
     longTerm: longTerm ? `• ${longTerm}` : '• (none)',
     shared: shared ? `• ${shared}` : '• (none)',
   };
@@ -209,8 +216,12 @@ const defaultLLMResponse = (agent: DynamicAgent, context: ConversationContext): 
   };
 };
 
+const MAX_CONSECUTIVE_TURNS = 3;
+const ALTERNATION_WINDOW = 6;
+
 const buildAgentMessages = (agent: DynamicAgent, context: ConversationContext) => {
-  const memory = formatAgentMemory(context.memoryStore, agent.id);
+  const buffer = context.shortTermBuffer.get(agent.id) ?? [];
+  const memory = formatAgentMemory(context.memoryStore, agent.id, buffer);
   const conversationSummary = summariseMessages(context.messages, 12);
   const partnerList = context.agents.map((entry) => `${entry.name} (${entry.role})`).join('\n- ');
   const agentInstruction = agentPrompts[agent.purpose] ?? '';
@@ -219,6 +230,7 @@ const buildAgentMessages = (agent: DynamicAgent, context: ConversationContext) =
     `You are ${agent.name} (${agent.role}).`,
     agentInstruction,
     'Collaborate with the team to solve the user request. Debate respectfully, cross-check reasoning, and either delegate or respond to the user when ready.',
+    'If the user is designing automations or workflows, outline Trigger -> Processor -> Action steps, call out credential requirements, and surface save/load intents so the Automation Builder can apply changes instantly.',
     'Always respond in pure JSON with keys: "to", "content", "reasoning", "delegate", "references", "memory".',
     'Valid values for "to" and "delegate" are one of the agent names or "User".',
     'If you decide the answer is ready for the user, set "to" to "User" and "delegate" to null.',
@@ -252,18 +264,15 @@ const buildAgentMessages = (agent: DynamicAgent, context: ConversationContext) =
 };
 
 const invokeAgent = async (agent: DynamicAgent, context: ConversationContext): Promise<AgentLLMResponse> => {
-  if (!openai) {
-    return defaultLLMResponse(agent, context);
-  }
-
   try {
     const messages = buildAgentMessages(agent, context);
-    const response = await openai.chat.completions.create({
-      model: DEFAULT_MODEL,
-      temperature: 0.6,
-      messages,
+    const systemPrompt = messages[0]?.content ?? '';
+    const userPrompt = messages[1]?.content ?? '';
+    const content = await routeMessage({
+      prompt: userPrompt,
+      context: systemPrompt,
+      intent: `multi_agent_${agent.purpose}`,
     });
-    const content = response.choices[0]?.message?.content ?? '';
     const parsed = parseJson(content);
     if (parsed) {
       return parsed;
@@ -322,6 +331,21 @@ const addMessage = async (
   context.messages.push(entry);
   context.hooks?.onMessage?.(entry);
 
+  const pushBuffer = (agent: DynamicAgent | 'User', value: string) => {
+    if (typeof agent === 'string') return;
+    const buffer = context.shortTermBuffer.get(agent.id) ?? [];
+    buffer.push(value.trim());
+    if (buffer.length > TASK_BUFFER_LIMIT) {
+      buffer.splice(0, buffer.length - TASK_BUFFER_LIMIT);
+    }
+    context.shortTermBuffer.set(agent.id, buffer);
+  };
+
+  pushBuffer(from, entry.content);
+  if (typeof to !== 'string') {
+    pushBuffer(to, `${entry.from}: ${entry.content}`);
+  }
+
   if (typeof from !== 'string') {
     await context.memoryStore.appendAgentMemory(from.id, entry.content, {
       promoteToLongTerm: options.promoteMemory,
@@ -358,33 +382,13 @@ const applyMemoryUpdates = async (
 };
 
 const generateFinalSummary = async (context: ConversationContext, coordinator: DynamicAgent): Promise<AgentLLMResponse> => {
-  if (!openai) {
-    const summary = summariseMessages(context.messages, 12);
-    return {
-      to: 'User',
-      content: `Here is the team consensus:\n\n${summary}`,
-      reasoning: 'Fallback summary without LLM access.',
-      delegate: null,
-    };
-  }
-
   try {
     const conversation = summariseMessages(context.messages, 18);
-    const response = await openai.chat.completions.create({
-      model: DEFAULT_MODEL,
-      temperature: 0.5,
-      messages: [
-        {
-          role: 'system',
-          content: `You are ${coordinator.name}. Summarise the multi-agent debate and propose a final answer for the user. Provide JSON with keys: to="User", content, reasoning, references.`,
-        },
-        {
-          role: 'user',
-          content: `User request: ${context.prompt}\n\nConversation transcript:\n${conversation}`,
-        },
-      ],
+    const content = await routeMessage({
+      prompt: `User request: ${context.prompt}\n\nConversation transcript:\n${conversation}`,
+      context: `You are ${coordinator.name}. Summarise the multi-agent debate and propose a final answer for the user. Provide JSON with keys: to="User", content, reasoning, references.`,
+      intent: 'multi_agent_summary',
     });
-    const content = response.choices[0]?.message?.content ?? '';
     return (
       parseJson(content) ?? {
         to: 'User',
@@ -423,6 +427,9 @@ export class MultiAgentOrchestrator {
       memoryStore: this.memoryStore,
       messages: [],
       hooks,
+      turnStats: new Map(),
+      turnSequence: [],
+      shortTermBuffer: new Map(),
     };
 
     hooks?.onAgents?.(agents);
@@ -432,9 +439,14 @@ export class MultiAgentOrchestrator {
     let speaker: DynamicAgent = coordinator;
     let turns = 0;
     let finalDelivered = false;
+    let finalSummaryText = '';
 
     while (turns < MAX_TURNS) {
       turns += 1;
+      if (!this.guardTurnTaking(context, speaker)) {
+        console.warn('[multi-agent] turn-taking governor halted session', { sessionId, speaker: speaker.name });
+        break;
+      }
       const response = await invokeAgent(speaker, context);
       const targetAgent =
         response.to === 'User' ? null : context.agents.find((agent) => agent.name === response.to) ?? coordinator;
@@ -448,6 +460,7 @@ export class MultiAgentOrchestrator {
       await applyMemoryUpdates(context, speaker, targetAgent, response);
 
       if (response.to === 'User') {
+        finalSummaryText = response.content;
         finalDelivered = true;
         break;
       }
@@ -466,9 +479,14 @@ export class MultiAgentOrchestrator {
         references: summary.references,
         promoteMemory: true,
       });
+      finalSummaryText = summary.content;
       const sharedSummary = `Summary for "${prompt}": ${summary.content}`;
       await context.memoryStore.appendSharedMemory(sharedSummary, [coordinator.id, 'User', sessionId]);
       hooks?.onMemory?.(context.memoryStore.getSnapshot());
+    }
+
+    if (finalSummaryText) {
+      await storeFinalInsight(context, finalSummaryText, coordinator);
     }
 
     const memorySnapshot = this.memoryStore.getSnapshot();
@@ -482,4 +500,58 @@ export class MultiAgentOrchestrator {
     hooks?.onComplete?.(result);
     return result;
   }
+
+  private guardTurnTaking(context: ConversationContext, speaker: DynamicAgent): boolean {
+    const stats = context.turnStats.get(speaker.id) ?? { count: 0, consecutive: 0, lastTimestamp: 0 };
+    const lastMessage = context.messages[context.messages.length - 1];
+    stats.count += 1;
+    if (lastMessage && lastMessage.from === speaker.name) {
+      stats.consecutive += 1;
+    } else {
+      stats.consecutive = 1;
+    }
+    stats.lastTimestamp = Date.now();
+    context.turnStats.set(speaker.id, stats);
+
+    context.turnSequence.push(speaker.name);
+    if (context.turnSequence.length > 12) {
+      context.turnSequence.shift();
+    }
+
+    const recent = context.turnSequence.slice(-ALTERNATION_WINDOW);
+    if (recent.length >= ALTERNATION_WINDOW && isAlternatingSequence(recent)) {
+      return false;
+    }
+
+    if (stats.consecutive >= MAX_CONSECUTIVE_TURNS) {
+      return false;
+    }
+    return true;
+  }
+}
+
+function isAlternatingSequence(sequence: string[]): boolean {
+  const unique = new Set(sequence);
+  if (unique.size !== 2) {
+    return false;
+  }
+  for (let i = 2; i < sequence.length; i += 1) {
+    if (sequence[i] !== sequence[i - 2]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function storeFinalInsight(context: ConversationContext, outcome: string, coordinator: DynamicAgent) {
+  const agentsInvolvedIds = context.agents.map((agent) => agent.id);
+  const agentsInvolvedNames = context.agents.map((agent) => agent.name);
+  const content = [
+    `Final Outcome for "${context.prompt}"`,
+    `Outcome: ${outcome.trim()}`,
+    `Agents: ${agentsInvolvedNames.join(', ')}`,
+    `Turns: ${context.messages.length}`,
+    `Coordinator: ${coordinator.name}`,
+  ].join('\n');
+  await context.memoryStore.appendSharedMemory(content, agentsInvolvedIds);
 }

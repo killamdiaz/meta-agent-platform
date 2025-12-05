@@ -1,0 +1,9 @@
+{
+  "name": "discord-support-bot",
+  "description": "Real-time Discord assistant for community support and escalation.",
+  "role": "Support Bot",
+  "privilegeLevel": "tool",
+  "capabilities": ["respond", "notify", "summarize"],
+  "safeActions": ["TASK", "INFO", "RESULT"],
+  "commandScope": []
+}

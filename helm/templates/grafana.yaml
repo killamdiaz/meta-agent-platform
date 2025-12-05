@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forge-grafana
+  template:
+    metadata:
+      labels:
+        app: forge-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: "{{ .Values.grafana.image }}"
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "{{ .Values.grafana.adminUser }}"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "{{ .Values.grafana.adminPassword }}"
+          ports:
+            - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-grafana
+spec:
+  type: ClusterIP
+  selector:
+    app: forge-grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

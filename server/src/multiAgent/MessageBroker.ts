@@ -34,7 +34,7 @@ export type MessagePayload = Omit<AgentMessage, 'id' | 'timestamp'> & {
   timestamp?: string;
 };
 
-type BrokerEventName = 'message' | 'agent:state' | 'agent:graph';
+type BrokerEventName = 'message' | 'agent:state' | 'agent:graph' | 'token';
 
 export interface BrokerAgentDescriptor {
   id: string;
@@ -58,6 +58,13 @@ export interface BrokerGraphSnapshot {
   links: BrokerLinkDescriptor[];
 }
 
+export interface TokenUsageSnapshot {
+  total: number;
+  byAgent: Record<string, number>;
+}
+
+const AGENT_COMMS_DISABLED = process.env.AGENT_COMMS_DISABLED === 'true';
+
 export class MessageBroker extends EventEmitter {
   private readonly history: AgentMessage[] = [];
   private readonly topicSubscribers = new Map<string, Set<string>>();
@@ -65,6 +72,8 @@ export class MessageBroker extends EventEmitter {
   private readonly links = new Map<string, BrokerLinkDescriptor>();
   private readonly agentTopics = new Map<string, Set<string>>();
   private readonly agentAliasTopics = new Map<string, Set<string>>();
+  private readonly tokenUsageByAgent = new Map<string, number>();
+  private totalTokens = 0;
 
   constructor() {
     super();
@@ -83,12 +92,20 @@ export class MessageBroker extends EventEmitter {
       timestamp,
       content,
     };
+    if (AGENT_COMMS_DISABLED) {
+      // FIX APPLIED: Agent-to-agent comms disabled
+      return message;
+    }
     this.history.push(message);
+    this.trackTokenUsage(message);
     this.emit('message', message);
     return message;
   }
 
   emitStateChange(update: AgentStateChange) {
+    if (AGENT_COMMS_DISABLED) {
+      return; // FIX APPLIED: Agent-to-agent comms disabled
+    }
     this.applyStateChange(update);
     this.emit('agent:state', update);
   }
@@ -158,6 +175,16 @@ export class MessageBroker extends EventEmitter {
   }
 
   getGraphSnapshot(): BrokerGraphSnapshot {
+    if (AGENT_COMMS_DISABLED) {
+      return {
+        agents: Array.from(this.agents.values()).map((agent) => ({
+          ...agent,
+          connections: [],
+          isTalking: false,
+        })),
+        links: [],
+      };
+    }
     const now = Date.now();
     const links: BrokerLinkDescriptor[] = [];
     for (const link of this.links.values()) {
@@ -199,6 +226,20 @@ export class MessageBroker extends EventEmitter {
 
   getHistory(): AgentMessage[] {
     return [...this.history];
+  }
+
+  getTokenUsage(): TokenUsageSnapshot {
+    return {
+      total: this.totalTokens,
+      byAgent: Object.fromEntries(this.tokenUsageByAgent.entries()),
+    };
+  }
+
+  onTokenUsage(listener: (usage: TokenUsageSnapshot) => void): () => void {
+    this.on('token', listener);
+    return () => {
+      this.off('token', listener);
+    };
   }
 
   override emit(eventName: BrokerEventName, ...args: unknown[]): boolean {
@@ -320,5 +361,18 @@ export class MessageBroker extends EventEmitter {
 
   private emitGraphSnapshot() {
     this.emit('agent:graph', this.getGraphSnapshot());
+  }
+
+  private trackTokenUsage(message: AgentMessage) {
+    const rawValue = (message.metadata as { tokens?: unknown } | undefined)?.tokens;
+    const parsed = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed <= 0) {
+      return;
+    }
+    this.totalTokens += parsed;
+    const previous = this.tokenUsageByAgent.get(message.from) ?? 0;
+    this.tokenUsageByAgent.set(message.from, previous + parsed);
+    const snapshot = this.getTokenUsage();
+    this.emit('token', snapshot);
   }
 }

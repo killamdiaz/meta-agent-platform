@@ -9,6 +9,8 @@ interface AgentNodeProps {
     status: string;
     role?: string;
     isTalking?: boolean;
+    isVirtual?: boolean;
+    sourceId?: string;
   };
   selected?: boolean;
 }
@@ -24,15 +26,17 @@ export function AgentNode({ id, data, selected }: AgentNodeProps) {
 
   const badgeColor = statusColor[data.status] ?? "bg-muted";
   const talking = Boolean(data.isTalking);
+  const targetId = data.sourceId ?? id;
+  const isVirtual = Boolean(data.isVirtual);
 
   return (
     <div
-      onClick={() => selectAgent(id)}
-      className={`px-6 py-3 rounded-full bg-card border flex items-center gap-3 cursor-pointer transition-all hover:shadow-lg hover:shadow-primary/20 min-w-[200px] ${
-        selected ? "border-primary shadow-lg shadow-primary/30" : "border-border hover:border-primary/50"
+      onClick={() => selectAgent(targetId)}
+      className={`px-6 py-3 rounded-full border flex items-center gap-3 cursor-pointer transition-all hover:shadow-lg hover:shadow-primary/20 min-w-[200px] ${
+        selected ? "bg-card border-primary shadow-lg shadow-primary/30" : "bg-card border-border hover:border-primary/50"
       } ${
         talking ? "ring-2 ring-amber-400 ring-offset-2 ring-offset-background" : ""
-      }`}
+      } ${isVirtual ? "opacity-90 backdrop-blur-sm" : ""}`}
     >
       <Handle
         type="target"

@@ -1,0 +1,9 @@
+{
+  "name": "docs-summarizer-agent",
+  "description": "Summarizes lengthy documents and provides concise knowledge snippets.",
+  "role": "Knowledge Summarizer",
+  "privilegeLevel": "tool",
+  "capabilities": ["read", "summarize", "embed"],
+  "safeActions": ["TASK", "RESULT"],
+  "commandScope": []
+}

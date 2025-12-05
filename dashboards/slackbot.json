@@ -1,0 +1,8 @@
+{
+  "title": "Slackbot Metrics",
+  "panels": [
+    { "type": "graph", "title": "Slack events processed", "targets": [{ "expr": "slack_events_processed_total" }] },
+    { "type": "graph", "title": "Tokens used", "targets": [{ "expr": "tokens_consumed_total" }] },
+    { "type": "graph", "title": "Errors per minute", "targets": [{ "expr": "rate(errors_total[1m])" }] }
+  ]
+}

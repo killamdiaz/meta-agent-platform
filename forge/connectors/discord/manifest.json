@@ -1,0 +1,11 @@
+{
+  "name": "discord",
+  "version": "1.0.0",
+  "category": "communication",
+  "description": "Manage Discord guilds and channels via bot integrations.",
+  "required_auth": {
+    "type": "api_key"
+  },
+  "example_actions": ["send_message", "list_channels", "get_guilds"],
+  "homepage": "https://discord.com/developers/docs/intro"
+}

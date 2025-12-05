@@ -1,0 +1,9 @@
+{
+  "name": "data-analyst-agent",
+  "description": "Analyzes datasets and produces insight summaries and visual suggestions.",
+  "role": "Data Analyst",
+  "privilegeLevel": "tool",
+  "capabilities": ["analyze", "summarize", "visualize", "respond"],
+  "safeActions": ["TASK", "RESULT", "INFO"],
+  "commandScope": []
+}

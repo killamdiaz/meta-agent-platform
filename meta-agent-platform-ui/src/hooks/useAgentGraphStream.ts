@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { apiBaseUrl } from "@/lib/api";
 import { useAgentGraphStore } from "@/store/agentGraphStore";
+import { useTokenStore } from "@/store/tokenStore";
 import type {
   AgentGraphSnapshot,
   AgentMessageEvent,
@@ -11,6 +12,7 @@ export function useAgentGraphStream(enabled: boolean) {
   const updateGraph = useAgentGraphStore((state) => state.updateGraph);
   const updateState = useAgentGraphStore((state) => state.updateState);
   const pushMessage = useAgentGraphStore((state) => state.pushMessage);
+  const setTokenUsage = useTokenStore((state) => state.setUsage);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -51,9 +53,19 @@ export function useAgentGraphStream(enabled: boolean) {
       }
     };
 
+    const handleTokens = (event: MessageEvent) => {
+      try {
+        const snapshot = JSON.parse(event.data) as { total: number; byAgent: Record<string, number> };
+        setTokenUsage(snapshot);
+      } catch (error) {
+        console.error("[agent-graph] failed to parse token usage", error);
+      }
+    };
+
     source.addEventListener("graph", handleGraph);
     source.addEventListener("state", handleState);
     source.addEventListener("message", handleMessage);
+    source.addEventListener("tokens", handleTokens);
 
     source.onerror = (error) => {
       console.error("[agent-graph] stream error", error);
@@ -65,11 +77,11 @@ export function useAgentGraphStream(enabled: boolean) {
       source.removeEventListener("graph", handleGraph as EventListener);
       source.removeEventListener("state", handleState as EventListener);
       source.removeEventListener("message", handleMessage as EventListener);
+      source.removeEventListener("tokens", handleTokens as EventListener);
       source.close();
       eventSourceRef.current = null;
     };
-  }, [enabled, pushMessage, updateGraph, updateState]);
+  }, [enabled, pushMessage, setTokenUsage, updateGraph, updateState]);
 }
 
 export default useAgentGraphStream;
-

@@ -42,6 +42,11 @@ export interface AgentGraphSnapshot {
   links: AgentGraphLinkSnapshot[];
 }
 
+export interface TokenUsageSnapshot {
+  total: number;
+  byAgent: Record<string, number>;
+}
+
 export interface AgentMessageEvent {
   id: string;
   from: string;
@@ -83,6 +88,96 @@ export interface AgentRecord {
   updated_at: string;
 }
 
+export interface AutomationRecord {
+  id: string;
+  name: string;
+  automation_type: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AutomationNodeType = "Trigger" | "Processor" | "Action";
+
+export interface AutomationNode {
+  id: string;
+  type: AutomationNodeType;
+  agent: string;
+  config: Record<string, unknown>;
+}
+
+export interface AutomationEdge {
+  from: string;
+  to: string;
+}
+
+export interface AutomationPipeline {
+  name?: string;
+  nodes: AutomationNode[];
+  edges: AutomationEdge[];
+}
+
+export type AutomationInstructionAction =
+  | {
+      type: 'create_node';
+      node?: {
+        id?: string;
+        label?: string;
+        agentType?: string;
+        type?: AutomationNodeType;
+        config?: Record<string, unknown>;
+        position?: { x: number; y: number };
+        metadata?: Record<string, unknown>;
+      };
+    }
+  | {
+      type: 'update_node';
+      id: string;
+      label?: string;
+      agentType?: string;
+      nodeType?: AutomationNodeType;
+      config?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+      position?: { x: number; y: number };
+    }
+  | { type: 'delete_node'; id: string }
+  | { type: 'connect_nodes'; from: string; to: string; metadata?: Record<string, unknown> }
+  | { type: 'disconnect_nodes'; from: string; to: string }
+  | { type: 'update_metadata'; name?: string; description?: string; data?: Record<string, unknown> }
+  | { type: 'set_position'; id: string; position: { x: number; y: number } }
+  | { type: 'set_positions'; positions: Record<string, { x: number; y: number }> }
+  | { type: 'create_edge'; edge: { from: string; to: string; metadata?: Record<string, unknown> } }
+  | { type: 'delete_edge'; edge: { from: string; to: string } }
+  | { type: 'focus_node'; id: string }
+  | { type: 'custom'; payload: Record<string, unknown> }
+  | { type: string; [key: string]: unknown };
+
+export interface AutomationInterpretationResponse {
+  success?: boolean;
+  message?: string;
+  actions: AutomationInstructionAction[];
+  raw?: string;
+}
+
+export type AutomationBuilderStatus = "success" | "awaiting_key" | "saved" | "loaded";
+
+export interface AutomationBuilderResponse {
+  status: AutomationBuilderStatus;
+  pipeline?: AutomationPipeline;
+  agent?: string;
+  prompt?: string;
+  name?: string;
+}
+
+export interface AutomationDrawerEvent {
+  isOpen: boolean;
+}
+
+export interface AutomationStatusEvent {
+  status: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface TaskRecord {
   id: string;
   agent_id: string;
@@ -99,6 +194,8 @@ export interface MemoryEntry {
   content: string;
   metadata: Record<string, unknown>;
   created_at: string;
+  memory_type: 'short_term' | 'long_term';
+  expires_at: string | null;
 }
 
 export interface AgentMemoryResponse {
@@ -126,6 +223,7 @@ export interface OverviewInsights {
     updatedAt: string;
     agentName: string;
   }[];
+  tokenUsage?: TokenUsageSnapshot;
 }
 
 export interface CommandResponse {

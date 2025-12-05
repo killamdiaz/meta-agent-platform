@@ -1,4 +1,4 @@
-export type NodeType = "document" | "memory" | "agent";
+export type NodeType = "document" | "memory" | "agent" | "integration";
 export type NodeStatus = "active" | "new" | "older" | "forgotten" | "expiring";
 export type RelationType = "derived" | "updated" | "referenced" | "similar" | "extends" | "shared";
 
@@ -13,6 +13,8 @@ export interface GraphNode {
     tokens?: number;
     similarity?: number;
     createdBy?: string;
+    memoryType?: 'short_term' | 'long_term';
+    expiresAt?: string | null;
   };
   x?: number;
   y?: number;
