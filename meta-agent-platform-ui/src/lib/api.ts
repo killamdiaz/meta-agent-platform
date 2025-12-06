@@ -46,6 +46,33 @@ export const API_BASE = (() => {
   return configured ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 })();
 
+export const EXHAUST_BASE = (() => {
+  const configured = import.meta.env.VITE_EXHAUST_BASE_URL;
+  const normalize = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
+
+  if (typeof window !== 'undefined') {
+    if (configured) {
+      try {
+        const url = new URL(configured, window.location.origin);
+        if (url.hostname === 'exhaust' && window.location.hostname !== 'exhaust') {
+          url.hostname = window.location.hostname;
+        }
+        return normalize(url.toString());
+      } catch (error) {
+        console.warn('Invalid VITE_EXHAUST_BASE_URL, using as-is', error);
+        return normalize(configured);
+      }
+    }
+    if (import.meta.env.DEV) {
+      return normalize(
+        `${window.location.protocol}//${window.location.hostname || 'localhost'}:4100`,
+      );
+    }
+    return '';
+  }
+  return configured ?? (import.meta.env.DEV ? 'http://localhost:4100' : '');
+})();
+
 type ApiError = Error & { status?: number };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {

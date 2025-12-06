@@ -45,7 +45,7 @@ export function CommandBox({ streamUrl, token, className }: CommandBoxProps) {
       <div className="space-y-2">
         <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Stream URL</label>
         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 border border-border/50">
-          <code className="flex-1 text-sm font-mono text-foreground/80 truncate">{streamUrl}</code>
+          <code className="flex-1 text-sm font-mono text-foreground/80 break-all whitespace-pre-wrap">{streamUrl}</code>
           <CopyButton text={streamUrl} field="URL" />
         </div>
       </div>
@@ -53,7 +53,7 @@ export function CommandBox({ streamUrl, token, className }: CommandBoxProps) {
       <div className="space-y-2">
         <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">One-Time Token</label>
         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/30 border border-border/50">
-          <code className="flex-1 text-sm font-mono text-foreground/80 truncate">{token}</code>
+          <code className="flex-1 text-sm font-mono text-foreground/80 break-all whitespace-pre-wrap">{token}</code>
           <CopyButton text={token} field="Token" />
         </div>
       </div>
@@ -69,7 +69,7 @@ export function CommandBox({ streamUrl, token, className }: CommandBoxProps) {
             <CopyButton text={cliCommand.replace(/\\\n\s*/g, " ")} field="Command" />
           </div>
           <pre className="p-4 overflow-x-auto">
-            <code className="text-sm font-mono text-emerald-400 whitespace-pre">{cliCommand}</code>
+            <code className="text-sm font-mono text-emerald-400 whitespace-pre-wrap break-all">{cliCommand}</code>
           </pre>
         </div>
       </div>

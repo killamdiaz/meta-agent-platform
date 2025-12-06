@@ -1,12 +1,15 @@
-import { useState } from "react";
-import { ExhaustStream, mockAIAnalysis } from "@/data/mockExhausts";
+import { useEffect, useMemo, useState } from "react";
+import { ExhaustStream, mockAIAnalysis, LogEntry } from "@/data/mockExhausts";
 import { StatusBadge } from "./StatusBadge";
 import { TerminalViewer } from "./TerminalViewer";
-import { AIAnalysisPanel } from "./AIAnalysisPanel";
+import { ErrorSummariesPanel } from "./ErrorSummariesPanel";
+import { LogsChatPanel } from "./LogsChatPanel";
 import { CommandBox } from "./CommandBox";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Copy, Unplug, Trash2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import { EXHAUST_BASE } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 interface LogStreamViewProps {
   stream: ExhaustStream;
@@ -16,7 +19,53 @@ interface LogStreamViewProps {
 }
 
 export function LogStreamView({ stream, onBack, onDisconnect, onDelete }: LogStreamViewProps) {
-  const [showEmptyState] = useState(stream.logs.length === 0);
+  const { user } = useAuth();
+  const [logs, setLogs] = useState<LogEntry[]>(stream.logs || []);
+  const [showEmptyState, setShowEmptyState] = useState(stream.logs.length === 0);
+  const [polling, setPolling] = useState<ReturnType<typeof setInterval> | null>(null);
+  const [mode, setMode] = useState<"analysis" | "chat">("analysis");
+
+  const headers = useMemo(() => {
+    const h: Record<string, string> = {};
+    const token =
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("sb-access-token") ||
+      localStorage.getItem("sb-auth-token");
+    if (token) h["Authorization"] = `Bearer ${token}`;
+    const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+    if (orgId) h["x-org-id"] = orgId;
+    return h;
+  }, [user]);
+
+  useEffect(() => {
+    setLogs(stream.logs || []);
+    setShowEmptyState((stream.logs || []).length === 0);
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch(`${EXHAUST_BASE}/exhausts/${stream.id}/logs?limit=200`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        const items: LogEntry[] =
+          (data.items as any[])?.map((item) => ({
+            id: item.id,
+            timestamp: item.timestamp || item.created_at,
+            level: (item.level || "INFO").toString().toUpperCase(),
+            message: item.message || item.normalized_text || "",
+            raw: item.raw || item.raw_json,
+          })) ?? [];
+        setLogs(items.reverse());
+        setShowEmptyState(items.length === 0);
+      } catch {
+        /* ignore */
+      }
+    };
+    void fetchLogs();
+    const interval = setInterval(fetchLogs, 5000);
+    setPolling(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [stream.id, stream.logs, headers]);
 
   const copyCommand = () => {
     const command = `curl -X POST ${stream.streamUrl} -H "Authorization: Bearer ${stream.token}" --data-binary @/path/to/logfile.log`;
@@ -66,6 +115,14 @@ export function LogStreamView({ stream, onBack, onDisconnect, onDelete }: LogStr
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setMode(mode === "analysis" ? "chat" : "analysis")}
+            className="gap-2"
+          >
+            Chat
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onDelete}
             className="gap-2 text-red-400 border-red-500/30 hover:bg-red-500/10"
           >
@@ -94,10 +151,14 @@ export function LogStreamView({ stream, onBack, onDisconnect, onDelete }: LogStr
         ) : (
           <>
             <div className="flex-1 p-6 overflow-hidden flex flex-col min-w-0">
-              <TerminalViewer logs={stream.logs} className="flex-1" />
+              <TerminalViewer logs={logs} className="max-h-[90vh] min-h-[70vh]" />
             </div>
             <div className="w-[400px] border-l border-border/50 bg-card/20 flex flex-col shrink-0">
-              <AIAnalysisPanel analysis={mockAIAnalysis} />
+              {mode === "analysis" ? (
+                <ErrorSummariesPanel streamId={stream.id} />
+              ) : (
+                <LogsChatPanel streamId={stream.id} />
+              )}
             </div>
           </>
         )}

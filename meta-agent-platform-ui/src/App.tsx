@@ -22,6 +22,8 @@ import AuthCallback from "./pages/AuthCallback";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { useSupabaseTokenSync } from "@/hooks/useSupabaseTokenSync";
 import useAgentGraphStream from "@/hooks/useAgentGraphStream";
+import { LicenseBanner } from "@/components/LicenseBanner";
+import { useLicenseStatus } from "@/hooks/useLicenseStatus";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,33 +37,61 @@ const queryClient = new QueryClient({
 const AppRoutes = () => {
   const location = useLocation();
   const hideSidebar = location.pathname.startsWith("/login") || location.pathname.startsWith("/auth");
+  const { data: license, isExpired, isWarning } = useLicenseStatus();
+  const banner = isExpired
+    ? { kind: "expired" as const, message: "Important: Licence expired" }
+    : isWarning
+      ? { kind: "warning" as const, message: "Important: Licence usage almost full" }
+      : null;
+
+  const content = (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
+
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<Overview />} />
+        <Route path="/network" element={<AgentNetwork />} />
+        <Route path="/memory" element={<MemoryGraph />} />
+        <Route path="/multi-agent" element={<MultiAgentConsole />} />
+        <Route path="/console" element={<CommandConsole />} />
+        <Route path="/multi-agent/runtime" element={<ToolAgentConsole />} />
+            <Route path="/exhausts" element={<Exhausts />} />
+            <Route path="/exhausts/:streamId" element={<Exhausts />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/billing" element={<Billing />} />
+        <Route path="/integrations" element={<Integrations />} />
+        <Route path="/data-sources" element={<DataSources />} />
+        <Route path="/help" element={<Help />} />
+      </Route>
+
+      {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
 
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden">
-      {!hideSidebar && <AppSidebar />}
-      <div className="flex-1 overflow-y-auto">
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-
-          <Route element={<ProtectedRoute />}>
-            <Route path="/" element={<Overview />} />
-            <Route path="/network" element={<AgentNetwork />} />
-            <Route path="/memory" element={<MemoryGraph />} />
-            <Route path="/multi-agent" element={<MultiAgentConsole />} />
-            <Route path="/console" element={<CommandConsole />} />
-            <Route path="/multi-agent/runtime" element={<ToolAgentConsole />} />
-            <Route path="/exhausts" element={<Exhausts />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/billing" element={<Billing />} />
-            <Route path="/integrations" element={<Integrations />} />
-            <Route path="/data-sources" element={<DataSources />} />
-            <Route path="/help" element={<Help />} />
-          </Route>
-
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+    <div className="flex h-screen w-full flex-col bg-background overflow-hidden">
+      {banner && <LicenseBanner kind={banner.kind} message={banner.message} />}
+      <div className="flex flex-1 min-h-0">
+        {!hideSidebar && <AppSidebar />}
+        <div className="flex-1 overflow-y-auto relative">
+          {isExpired && (
+            <div className="absolute inset-0 z-20 bg-background/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <p className="text-lg font-semibold">Important: Liscence expired</p>
+              <p className="text-sm text-muted-foreground">
+                Your token allowance has been exhausted or the license is invalid. Please renew your license to continue using Atlas Forge.
+              </p>
+              <a
+                href="/settings"
+                className="text-primary underline font-medium"
+              >
+                Go to Settings
+              </a>
+            </div>
+          )}
+          <div className={isExpired ? "pointer-events-none opacity-60" : ""}>{content}</div>
+        </div>
       </div>
     </div>
   );

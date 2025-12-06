@@ -54,6 +54,7 @@ services:
       - BROWSER=none
       - VITE_API_BASE=http://server:4000
       - VITE_API_BASE_URL=http://server:4000
+      - VITE_EXHAUST_BASE_URL=http://exhaust:4100
       - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
       - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
       - VITE_ATLAS_LOGIN_URL=${VITE_ATLAS_LOGIN_URL}
@@ -92,6 +93,7 @@ services:
     depends_on:
       - frontend
       - server
+      - exhaust
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
@@ -151,6 +153,23 @@ services:
     labels:
       - "service=ingestor"
       - "component=ingestion"
+
+  exhaust:
+    build: ./exhaust-lss-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - EXHAUST_PORT=4100
+      - EXHAUST_PUBLIC_URL=${EXHAUST_PUBLIC_URL:-http://localhost:4100}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "4100:4100"
+    labels:
+      - "service=exhaust"
+      - "component=logs"
 
   browser:
     image: browserless/chrome:latest

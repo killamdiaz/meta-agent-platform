@@ -8,11 +8,19 @@ import { CommandBox } from "./CommandBox";
 import { StatusBadge } from "./StatusBadge";
 import { mockTickets } from "@/data/mockTickets";
 import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface CreateStreamModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreateStream: (name: string, ticketKey: string | null) => void;
+  onCreateStream: (name: string, ticketKey: string | null, type: "custom" | "zscaler_lss") => Promise<
+    | {
+        ingest_url?: string;
+        lss_ingest_url?: string;
+        lss_secret?: string;
+      }
+    | void
+  >;
 }
 
 export const CreateStreamModal = ({ open, onOpenChange, onCreateStream }: CreateStreamModalProps) => {
@@ -20,21 +28,30 @@ export const CreateStreamModal = ({ open, onOpenChange, onCreateStream }: Create
   const [linkedTicket, setLinkedTicket] = useState<string>("");
   const [isCreating, setIsCreating] = useState(false);
   const [isCreated, setIsCreated] = useState(false);
+  const [type, setType] = useState<"custom" | "zscaler_lss">("custom");
+  const [ingestUrl, setIngestUrl] = useState<string>("");
+  const [secret, setSecret] = useState<string>("");
 
-  // Generate mock URL and token
-  const streamUrl = streamName 
-    ? `https://atlas.exhaust.io/stream/${streamName.toLowerCase().replace(/\s+/g, '-')}`
-    : '';
-  const token = `exh_live_${Math.random().toString(36).substring(2, 22)}`;
+  // Defaults until backend responds
+  const streamUrl =
+    ingestUrl ||
+    (streamName ? `https://atlas.exhaust.io/stream/${streamName.toLowerCase().replace(/\s+/g, "-")}` : "");
+  const token = secret || `exh_live_${Math.random().toString(36).substring(2, 22)}`;
 
   const handleCreate = async () => {
-    if (!streamName.trim()) return;
-    
+    const name = streamName.trim();
+    if (!name) return;
     setIsCreating(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setIsCreating(false);
-    setIsCreated(true);
+    try {
+      const resp = await onCreateStream(name, linkedTicket || null, type);
+      if (resp) {
+        setIngestUrl(resp.ingest_url || resp.lss_ingest_url || "");
+        setSecret(resp.lss_secret || "");
+      }
+      setIsCreated(true);
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleClose = () => {
@@ -44,11 +61,13 @@ export const CreateStreamModal = ({ open, onOpenChange, onCreateStream }: Create
       setStreamName("");
       setLinkedTicket("");
       setIsCreated(false);
+      setIngestUrl("");
+      setSecret("");
+      setType("custom");
     }, 200);
   };
 
   const handleConfirm = () => {
-    onCreateStream(streamName, linkedTicket || null);
     handleClose();
   };
 
@@ -64,6 +83,33 @@ export const CreateStreamModal = ({ open, onOpenChange, onCreateStream }: Create
         <div className="space-y-6 py-4">
           {!isCreated ? (
             <>
+              {/* Type selection */}
+              <div className="space-y-2">
+                <Label>Exhaust Type</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    className={cn(
+                      "border rounded-lg p-3 text-left hover:border-border",
+                      type === "custom" ? "border-border bg-muted/20" : "border-border/60",
+                    )}
+                    onClick={() => setType("custom")}
+                  >
+                    <div className="font-semibold">Custom Log Stream</div>
+                    <p className="text-xs text-muted-foreground mt-1">Generic JSON/NDJSON ingestion.</p>
+                  </button>
+                  <button
+                    className={cn(
+                      "border rounded-lg p-3 text-left hover:border-border",
+                      type === "zscaler_lss" ? "border-border bg-muted/20" : "border-border/60",
+                    )}
+                    onClick={() => setType("zscaler_lss")}
+                  >
+                    <div className="font-semibold">Zscaler LSS</div>
+                    <p className="text-xs text-muted-foreground mt-1">Use LSS URL + secret in Zscaler admin.</p>
+                  </button>
+                </div>
+              </div>
+
               {/* Stream Name */}
               <div className="space-y-2">
                 <Label htmlFor="stream-name">Stream Name</Label>
@@ -149,7 +195,41 @@ export const CreateStreamModal = ({ open, onOpenChange, onCreateStream }: Create
               </div>
 
               {/* Command Box */}
-              <CommandBox streamUrl={streamUrl} token={token} />
+              {type === "zscaler_lss" ? (
+                <div className="space-y-3">
+                  <div className="p-3 rounded-lg border border-border/50 bg-muted/20">
+                    <p className="text-xs text-muted-foreground uppercase">LSS Ingest URL</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-sm text-foreground/80 break-all whitespace-normal">{ingestUrl}</code>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigator.clipboard.writeText(ingestUrl)}
+                      >
+                        Copy URL
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-border/50 bg-muted/20">
+                    <p className="text-xs text-muted-foreground uppercase">Secret Token</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-sm text-foreground/80 break-all whitespace-normal">{secret}</code>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigator.clipboard.writeText(secret)}
+                      >
+                        Copy Token
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-blue-500/30 bg-blue-500/5 text-sm text-muted-foreground">
+                    How to configure: Zscaler Admin → Log Streaming → Add Stream → Paste the URL and secret token.
+                  </div>
+                </div>
+              ) : (
+                <CommandBox streamUrl={streamUrl} token={token} />
+              )}
 
               {/* Info */}
               <div className="flex items-start gap-3 p-4 rounded-lg bg-blue-500/10 border border-blue-500/20">

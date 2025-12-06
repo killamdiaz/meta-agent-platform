@@ -40,20 +40,20 @@ export interface ChatCompletionResult {
 
 const openaiClient = config.openAiApiKey ? new OpenAI({ apiKey: config.openAiApiKey }) : null;
 
-function detectProvider(model: string): Provider {
+export function detectProvider(model: string): Provider {
   if (model.startsWith('local-') || model.includes('llama') || model.includes('mistral') || model.includes('mixtral')) {
     return 'local';
   }
   return 'openai';
 }
 
-function approximateTokenCount(text: string) {
+export function approximateTokenCount(text: string) {
   // Rough heuristic: average 4 chars per token.
   const cleaned = text.replace(/\s+/g, ' ').trim();
   return Math.max(1, Math.ceil(cleaned.length / 4));
 }
 
-async function logUsage({
+export async function logUsage({
   org_id,
   account_id,
   user_id,

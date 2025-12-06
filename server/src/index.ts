@@ -93,6 +93,7 @@ async function bootstrap() {
       '/meta-controller',
       '/automations',
       '/connectors',
+      '/exhaust',
       '/ingestion',
       '/usage',
       '/healthz'

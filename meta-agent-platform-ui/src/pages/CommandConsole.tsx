@@ -4,12 +4,14 @@ import { Button } from "@/components/ui/button";
 import TicketDrawer from "@/components/Console/TicketDrawer";
 import { type Ticket as TicketType } from "@/data/mockTickets";
 import { cn } from "@/lib/utils";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, EXHAUST_BASE } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { getIssueDetails, type JiraIssueDetails } from "@/hooks/useJiraIssue";
 import type { SimilarIssue } from "@/types/jira";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { type ExhaustStream } from "@/data/mockExhausts";
 
 type Message = {
   role: "user" | "assistant";
@@ -96,12 +98,10 @@ export default function CommandConsole() {
     { id: "diagnosis", name: "Diagnosis Engine" },
     { id: "analysis", name: "Analysis Agent" },
   ];
-  const statusStages = [
-    "Analyzing issue…",
-    "Searching KB for relevant documentation…",
-    "Searching for similar solved Jira tickets…",
-    "Compiling diagnosis…",
-  ];
+  const [logStreams, setLogStreams] = useState<ExhaustStream[]>([]);
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [logStreamByTicket, setLogStreamByTicket] = useState<Record<string, ExhaustStream>>({});
   const [mentionCandidates, setMentionCandidates] = useState(agents);
   const [mentionIndex, setMentionIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -185,9 +185,61 @@ export default function CommandConsole() {
     }
   }, [ticketCacheKey]);
 
+  const fetchLogStreams = useCallback(async () => {
+    try {
+      const license = localStorage.getItem("forge_license_key");
+      const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+      const res = await fetch(`${EXHAUST_BASE}/exhausts${orgId ? `?org_id=${orgId}` : ""}`, {
+        credentials: "include",
+        headers: license ? { "x-license-key": license } : undefined,
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const items = (data.items ?? []).map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        status: "waiting",
+        linkedTicket: null,
+        ticketKey: null,
+        createdBy: "You",
+        createdAt: s.created_at,
+        lastActivity: s.created_at,
+        streamUrl: s.ingest_url,
+        token: s.secret_token,
+        logs: [],
+      }));
+      setLogStreams(items);
+    } catch (err) {
+      console.error("[console] failed to load log streams", err);
+    }
+  }, [user]);
+
+  const fetchLogContext = useCallback(
+    async (ticketKey: string) => {
+      const stream = logStreamByTicket[ticketKey];
+      if (!stream) return "";
+      try {
+        const res = await fetch(`${EXHAUST_BASE}/streams/${stream.id}`, { credentials: "include" });
+        if (!res.ok) return "";
+        const data = await res.json();
+        const logs: { timestamp: string; level: string; message: string; source?: string }[] = data?.stream?.logs ?? [];
+        const recent = logs.slice(-20);
+        const formatted = recent
+          .map((l) => `[${l.timestamp}] ${l.level}${l.source ? ` ${l.source}` : ""} ${l.message}`)
+          .join("\n");
+        return `Log stream: ${stream.name} (${stream.id}) linked to ticket ${ticketKey}\n${formatted}`;
+      } catch (err) {
+        console.error("[console] failed to load log context", err);
+        return "";
+      }
+    },
+    [logStreamByTicket],
+  );
+
   useEffect(() => {
     void fetchIssues();
-  }, [fetchIssues]);
+    void fetchLogStreams();
+  }, [fetchIssues, fetchLogStreams]);
 
   const handleResolveTicket = async (ticket: TicketType) => {
     const headers: Record<string, string> = {};
@@ -256,14 +308,16 @@ export default function CommandConsole() {
       .filter((m) => m.content && m.content !== "__streaming__")
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
       .join("\n");
+    const logContext = selectedTicket ? await fetchLogContext(selectedTicket.key) : "";
     const kbInstruction = needsZscalerKb
       ? "\n\nWhen the user mentions Zscaler, search the Zscaler KB, cite sources, and answer concisely."
       : "\n\nAlways search the internal KB embeddings first and cite sources; if no relevant matches are found, fall back to LLM.";
     const citationInstruction =
       "\n\nCite sources inline using [source-name](url) and end with a bullet list under 'Sources:'; if no sources, explicitly say 'No sources found.'";
+    const logInstruction = logContext ? `\n\nLive Log Context:\n${logContext}` : "";
     const payload = history
-      ? `${history}\nUser: ${input}${kbInstruction}${citationInstruction}`
-      : `${input}${kbInstruction}${citationInstruction}`;
+      ? `${history}${logInstruction}\nUser: ${input}${kbInstruction}${citationInstruction}`
+      : `${logInstruction}${input}${kbInstruction}${citationInstruction}`;
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
@@ -278,12 +332,16 @@ export default function CommandConsole() {
         localStorage.getItem("sb-access-token") ||
         localStorage.getItem("sb-auth-token");
       const license = localStorage.getItem("forge_license_key");
+      const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+      const accountId = user?.id;
       const res = await fetch(`${API_BASE}/chat/send`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
           ...(license ? { "x-license-key": license } : {}),
+          ...(orgId ? { "x-org-id": orgId } : {}),
+          ...(accountId ? { "x-account-id": accountId } : {}),
         },
         body,
         signal: controller.signal,
@@ -646,22 +704,8 @@ export default function CommandConsole() {
       ))}
       {isTyping && (
         <div className="flex justify-start animate-fade-in">
-          <div className="bg-muted rounded-2xl px-4 py-3 space-y-2">
-            <div className="flex gap-1">
-              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "0ms" }} />
-              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "150ms" }} />
-              <div className="w-2 h-2 rounded-full bg-atlas-glow animate-bounce" style={{ animationDelay: "300ms" }} />
-            </div>
-            <div className="text-xs text-muted-foreground space-y-1">
-              {statusStages.map((stage, idx) => (
-                <div key={stage} className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-atlas-glow/70" />
-                  <span className={cn("transition-opacity", idx === statusStages.length - 1 ? "font-semibold text-foreground" : "")}>
-                    {stage}
-                  </span>
-                </div>
-              ))}
-            </div>
+          <div className="w-10 h-10 flex items-center justify-center">
+            <div className="w-3 h-3 rounded-full bg-atlas-glow animate-pulse-scale" />
           </div>
         </div>
       )}
@@ -696,13 +740,30 @@ export default function CommandConsole() {
             </div>
           )}
           <div className="flex items-center gap-3 px-5 py-4">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
-            >
-              <Plus className="h-5 w-5" />
-            </Button>
+            <div className="relative">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="text-muted-foreground hover:text-foreground hover:bg-transparent h-9 w-9"
+                onClick={() => setShowPlusMenu((v) => !v)}
+              >
+                <Plus className="h-5 w-5" />
+              </Button>
+              {showPlusMenu && (
+                <div className="absolute left-0 mt-2 w-40 rounded-xl border border-border bg-card shadow-lg z-10">
+                  <button
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors rounded-t-xl"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setShowPlusMenu(false);
+                      setShowLogModal(true);
+                    }}
+                  >
+                    Connect logs
+                  </button>
+                </div>
+              )}
+            </div>
             <input
               type="text"
               value={input}
@@ -734,44 +795,131 @@ export default function CommandConsole() {
 
   if (showTicketView) {
     return (
-      <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto relative">
-        <div className="flex-[3] flex flex-col bg-card/30 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
-          {toast && (
-            <div className="absolute top-6 right-6 z-50">
-              <div className="bg-card/90 border border-border text-foreground px-4 py-3 rounded-xl shadow-lg animate-fade-in">
-                {toast}
+      <>
+        <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto relative">
+          <div className="flex-[3] flex flex-col bg-card/30 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
+            {toast && (
+              <div className="absolute top-6 right-6 z-50">
+                <div className="bg-card/90 border border-border text-foreground px-4 py-3 rounded-xl shadow-lg animate-fade-in">
+                  {toast}
+                </div>
               </div>
+            )}
+            <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
+              {renderMessages()}
             </div>
-          )}
-          <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
-            {renderMessages()}
+            {renderInput()}
           </div>
-          {renderInput()}
+          <div className="flex-1 min-w-[320px] max-w-[400px]">
+            <TicketDrawer
+              tickets={tickets}
+              selectedTicket={selectedTicket}
+              onSelectTicket={handleSelectTicket}
+              onClearSelection={() => setSelectedTicket(null)}
+              loading={ticketsLoading}
+              issueDetails={issueDetails}
+              similarIssues={similarIssues}
+              view={ticketView}
+              onChangeView={setTicketView}
+              onResolveTicket={handleResolveTicket}
+            />
+          </div>
         </div>
-        <div className="flex-1 min-w-[320px] max-w-[400px]">
-          <TicketDrawer
-            tickets={tickets}
-            selectedTicket={selectedTicket}
-            onSelectTicket={handleSelectTicket}
-            onClearSelection={() => setSelectedTicket(null)}
-            loading={ticketsLoading}
-            issueDetails={issueDetails}
-            similarIssues={similarIssues}
-            view={ticketView}
-            onChangeView={setTicketView}
-            onResolveTicket={handleResolveTicket}
-          />
-        </div>
-      </div>
+        <Dialog open={showLogModal} onOpenChange={setShowLogModal}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Connect logs</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              {logStreams.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No log streams yet. Create one in Exhausts.</p>
+              ) : (
+                logStreams.map((stream) => (
+                  <div key={stream.id} className="p-3 rounded-lg border border-border/50 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">{stream.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">{stream.streamUrl}</div>
+                      {selectedTicket && (
+                        <div className="text-[11px] text-muted-foreground">
+                          Ticket: {selectedTicket.key}
+                          {logStreamByTicket[selectedTicket.key]?.id === stream.id ? " (attached)" : ""}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="text-sm text-blue-400 hover:underline"
+                        onClick={() => {
+                          navigator.clipboard.writeText(
+                            `curl -X POST ${stream.streamUrl} -H "Authorization: Bearer ${stream.token}" --data-binary @/path/to/logfile.log`,
+                          );
+                        }}
+                      >
+                        Copy
+                      </button>
+                      {selectedTicket && (
+                        <button
+                          className="text-sm text-emerald-400 hover:underline"
+                          onClick={() => {
+                            setLogStreamByTicket((prev) => ({ ...prev, [selectedTicket.key]: stream }));
+                            setToast(`Logs linked to ${selectedTicket.key}`);
+                            setShowLogModal(false);
+                          }}
+                        >
+                          Attach
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </>
     );
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
-        {messages.length === 0 ? renderWelcome() : renderMessages()}
+    <>
+      <div className="flex flex-col h-screen">
+        <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
+          {messages.length === 0 ? renderWelcome() : renderMessages()}
+        </div>
+        {renderInput()}
       </div>
-      {renderInput()}
-    </div>
+      <Dialog open={showLogModal} onOpenChange={setShowLogModal}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Connect logs</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {logStreams.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No log streams yet. Create one in Exhausts.</p>
+            ) : (
+              logStreams.map((stream) => (
+                <div key={stream.id} className="p-3 rounded-lg border border-border/50 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">{stream.name}</div>
+                    <div className="text-xs text-muted-foreground">{stream.streamUrl}</div>
+                  </div>
+                  <button
+                    className="text-sm text-blue-400 hover:underline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(
+                        `curl -X POST ${stream.streamUrl} -H "Authorization: Bearer ${stream.token}" --data-binary @/path/to/logfile.log`,
+                      );
+                      setShowLogModal(false);
+                    }}
+                  >
+                    Copy command
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

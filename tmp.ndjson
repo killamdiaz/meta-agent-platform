@@ -1,0 +1,18 @@
+{
+  "message": "[storeEmbeddings] preparing chunk {\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"source_id\":\"AE-2\",\"chunk_index\":1,\"chunk_length\":95,\"total_chunks\":1}"
+}
+{
+  "message": "{\"event\":\"billing_usage\",\"source\":\"ingestion\",\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"agent_name\":\"IngestionEmbedding\",\"model\":\"text-embedding-3-small\",\"provider\":\"openai\",\"promptTokens\":24,\"completionTokens\":0,\"totalTokens\":24,\"cost_usd\":0,\"timestamp\":\"2025-12-06T16:08:19.249Z\"}"
+}
+{
+  "message": "[storeEmbeddings] embedding computed {\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"source_id\":\"AE-2\",\"chunk_index\":1,\"embedding_length\":1536}"
+}
+{
+  "message": "[storeEmbeddings] preparing chunk {\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"source_id\":\"SUP-1\",\"chunk_index\":1,\"chunk_length\":76,\"total_chunks\":1}"
+}
+{
+  "message": "{\"event\":\"billing_usage\",\"source\":\"ingestion\",\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"agent_name\":\"IngestionEmbedding\",\"model\":\"text-embedding-3-small\",\"provider\":\"openai\",\"promptTokens\":19,\"completionTokens\":0,\"totalTokens\":19,\"cost_usd\":0,\"timestamp\":\"2025-12-06T16:08:19.748Z\"}"
+}
+{
+  "message": "[storeEmbeddings] embedding computed {\"org_id\":\"d98ec3d2-6882-4174-82ac-8c5ba8b9b2ea\",\"source_id\":\"SUP-1\",\"chunk_index\":1,\"embedding_length\":1536}"
+}

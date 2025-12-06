@@ -34,8 +34,24 @@ export function TerminalViewer({ logs, className }: TerminalViewerProps) {
     }
   }, [logs, autoScroll, isPaused]);
 
-  const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
+  const formatTimestamp = (timestamp: string | number | null | undefined) => {
+    if (!timestamp) return "-";
+    let date: Date | null = null;
+    if (typeof timestamp === "number") {
+      // If it's seconds, convert to ms; if it's already ms, Date will handle.
+      const secsToMs = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+      date = new Date(secsToMs);
+    } else if (typeof timestamp === "string") {
+      const asNumber = Number(timestamp);
+      if (!Number.isNaN(asNumber) && asNumber !== 0) {
+        const secsToMs = asNumber < 10_000_000_000 ? asNumber * 1000 : asNumber;
+        date = new Date(secsToMs);
+      } else {
+        const parsed = new Date(timestamp);
+        date = Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+    }
+    if (!date || Number.isNaN(date.getTime())) return "-";
     const time = date.toLocaleTimeString("en-US", {
       hour12: false,
       hour: "2-digit",
@@ -47,7 +63,12 @@ export function TerminalViewer({ logs, className }: TerminalViewerProps) {
   };
 
   return (
-    <div className={cn("flex flex-col rounded-xl border border-border/50 bg-[#0d0d12] overflow-hidden", className)}>
+    <div
+      className={cn(
+        "flex flex-col rounded-xl border border-border/50 bg-[#0d0d12] overflow-hidden h-full",
+        className,
+      )}
+    >
       <div className="flex items-center justify-between px-4 py-2 bg-card/50 border-b border-border/50">
         <div className="flex items-center gap-2">
           <div className="flex gap-1.5">
@@ -78,7 +99,7 @@ export function TerminalViewer({ logs, className }: TerminalViewerProps) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm space-y-1 min-h-[300px] max-h-[500px]">
+      <div ref={scrollRef} className="overflow-y-auto p-4 font-mono text-sm space-y-1 h-full">
         {logs.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">

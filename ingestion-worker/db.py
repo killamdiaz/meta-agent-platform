@@ -4,6 +4,7 @@ import logging
 import psycopg2
 from psycopg2.extensions import AsIs
 from psycopg2.extras import RealDictCursor
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -75,32 +76,66 @@ def update_job(conn, job_id, **fields):
     conn.commit()
 
 
-def insert_embedding(conn, org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope="org"):
+def insert_embedding(conn, org_id, account_id, source_type, source_id, normalized_url, content_hash, chunk_index, content, embedding, metadata, visibility_scope="org"):
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO forge_embeddings
-                  (org_id, account_id, source_type, source_id, content, embedding, metadata, visibility_scope)
-                VALUES (%s,%s,%s,%s,%s,%s::vector,%s,%s)
+                  (org_id, account_id, source_type, source_id, normalized_url, content_hash, chunk_index, content, embedding, metadata, visibility_scope)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::vector,%s,%s)
+                ON CONFLICT (normalized_url, chunk_index) DO NOTHING
                 """,
                 [
                     org_id,
                     account_id,
                     source_type,
                     source_id,
+                    normalized_url,
+                    content_hash,
+                    chunk_index,
                     content,
                     PgVector(embedding),
                     json.dumps(metadata or {}),
                     visibility_scope,
                 ],
             )
-        logger.info(f"[db] inserted embedding source_id={source_id} len={len(content)}")
+        logger.info(f"[db] inserted embedding source_id={source_id} norm={normalized_url} idx={chunk_index} len={len(content)}")
         conn.commit()
     except Exception as exc:
         conn.rollback()
         logger.error(f"🔥 Failed to insert embedding for {source_id}: {exc}")
         raise
+
+
+def get_embedding_dimension(conn):
+    """
+    Returns the configured dimension of forge_embeddings.embedding (e.g., 1536 or 3072).
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  format_type(a.atttypid, a.atttypmod) AS embedding_type
+                FROM pg_attribute a
+                WHERE a.attrelid = 'forge_embeddings'::regclass
+                  AND a.attname = 'embedding'
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            type_text = row.get("embedding_type") if isinstance(row, dict) else row[0]
+            if not type_text:
+                return None
+            match = re.search(r"vector\((\d+)\)", type_text)
+            if match:
+                return int(match.group(1))
+    except Exception as exc:
+        logger.warning(f"Could not determine embedding dimension: {exc}")
+    return None
 
 
 def insert_usage(conn, org_id, account_id, user_id, source, agent_name, model_name, model_provider, input_tokens, output_tokens, total_tokens, cost_usd, metadata=None):
