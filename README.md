@@ -1,117 +1,183 @@
-# Cortex Runtime
+# Atlas Cortex Platform
 
-Cortex Runtime is a containerized agent framework that lets teams create, orchestrate, and observe modular AI teammates such as FinanceAgent, OutreachAgent, and FounderCore. This iteration focuses on a TypeScript/Node.js runtime with Supabase/Postgres storage and a React + Tailwind dashboard.
+Full-stack, multi-tenant AI agent platform with secure SAML SSO, Postgres/pgvector, and a React/Tailwind control plane. Build, run, and observe modular agents; stream their exhaust; and integrate enterprise identity (Okta/Azure/Ping).
 
-## Stack Overview
+---
 
-- **Node.js (Express + TypeScript)** API exposing agent CRUD, command console, task queue, and memory retrieval endpoints.
-- **Postgres 15 + pgvector** backing store for agent metadata, tasks, and contextual memories.
-- **Agent Manager & Coordinator** background service that continually polls for pending tasks, calls OpenAI GPT-5 (or deterministic fallback), and persists results back into the memory graph.
-- **React + TypeScript Dashboard** featuring live agent grids, task queue insights, memory inspector, and slash-command console.
-- **Docker Compose** definition covering Postgres, the Node server, React frontend, and nginx edge proxy.
+## What this platform does
+- **Multi-agent runtime**: Create agents, submit tasks, stream logs/output, and manage embeddings for retrieval-augmented work.
+- **Enterprise SSO (SAML 2.0)**: Per-org IdP metadata (issuer/SSO URL/certs), ACS endpoints, IdP/SP initiated flows, JIT user provisioning, and enforce-SSO mode.
+- **Observability**: Exhaust log streams and terminal viewers for agent runs.
+- **Integrations**: Slack, Jira, custom connectors, plus SAML admin UI for identity teams.
+- **Licensing & quotas**: License enforcement and usage tracking.
 
-## Requirements
+---
 
-- Docker 24+
-- Docker Compose v2
+## Architecture
+- **Backend (`server/`)**: TypeScript + Express API, coordinator loop, ingestion workers, SAML service, audit logging, and Postgres/pgvector store.
+- **Frontend (`meta-agent-platform-ui/`)**: React + Vite + Tailwind dashboard (agent/task controls, exhausts, integrations, SAML modal, login).
+- **Forge (`forge/`)**: Next.js scaffold for Supabase-based auth flows (optional).
+- **Database**: Postgres 15 with pgvector; migrations in `migrations/`.
+- **Containerization**: Docker Compose for Postgres, API (port `4000`), UI (port `3000`), optional nginx edge.
 
-## Quick start
+---
 
+## Quick start (Docker)
 ```bash
 docker compose up --build
 ```
+- UI: http://localhost:3000  
+- API: http://localhost:4000  
+- SP metadata: http://localhost:4000/.well-known/saml/metadata/:orgId
 
-Once the stack is running:
+Stop: `docker compose down`.
 
-- REST API at http://localhost:4000 (proxied via http://localhost/api/)
-- Frontend dashboard at http://localhost:3000 (or http://localhost via nginx)
+---
 
-## Running on macOS (fresh setup)
-
-1. **Install prerequisites**
-   - Install [Homebrew](https://brew.sh/) if you do not already have it: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
-   - Install Docker Desktop: `brew install --cask docker`, then launch Docker Desktop and sign in so that the Docker engine is running.
-   - (Optional for local development without containers) Install Node.js 20 LTS and pnpm: `brew install node@20 pnpm`.
-2. **Clone the repository**
-   ```bash
-   git clone https://github.com/<your-org>/meta-agent-platform.git
-   cd meta-agent-platform
-   ```
-3. **Create your environment file**
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` to set `OPENAI_API_KEY` (and any other secrets you need). The defaults already match the Docker Compose stack.
-4. **Start the containers**
-   ```bash
-   docker compose up --build
-   ```
-   The first build can take a few minutes while Node and React dependencies install.
-5. **Verify the services**
-   - Navigate to http://localhost (nginx) or http://localhost:3000 (direct React app) for the dashboard.
-   - Open http://localhost:4000/api/agents in your browser or via `curl` to confirm the API is serving requests.
-6. **(Optional) Run services natively**
-   - Start Postgres locally (Docker is still recommended) or point `DATABASE_URL` to an external instance.
-   - Install server dependencies: `cd server && pnpm install` (or `npm install`), then `pnpm run dev`.
-   - Install frontend dependencies: `cd frontend && pnpm install`, then `pnpm run dev` to launch Vite on http://localhost:5173.
-
-Shut everything down with `docker compose down` when you are finished.
-
-## Development
-
-Environment variables are loaded from `.env`. The most important values are:
-
+## Local development (native)
+Backend:
+```bash
+cd server
+npm install
+npm run dev   # :4000
 ```
-DATABASE_URL=postgres://postgres:postgres@db:5432/postgres
+Frontend:
+```bash
+cd meta-agent-platform-ui
+npm install
+npm run dev   # :5173 (or configure :3000)
+```
+
+---
+
+## Environment configuration (core)
+Set in `.env` at repo root (used by server). Key values:
+```
+APP_BASE_URL=http://localhost:3000
+API_BASE_URL=http://localhost:4000
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 OPENAI_API_KEY=sk-...
-FORCE_LOCAL=false   # optional: force all LLM calls to Ollama
-FORCE_GPT=false     # optional: force all LLM calls to OpenAI GPT
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=mistral:7b
 COORDINATOR_INTERVAL_MS=10000
-REACT_APP_API_BASE=http://localhost:4000
+LICENSE_SECRET=dev-license-secret
+ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+### SAML (Service Provider)
+```
+SAML_SP_ENTITY_ID=${APP_BASE_URL}/saml/metadata
+SAML_SP_ACS_BASE_URL=${API_BASE_URL}/auth/saml/acs
+SAML_SP_METADATA_BASE_URL=${API_BASE_URL}/.well-known/saml/metadata
+SAML_SP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+SAML_SP_CERTIFICATE="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+SAML_DEFAULT_REDIRECT=${APP_BASE_URL}/
+SAML_JWT_SECRET=super-long-random-256bit-string
+```
+Restart the server after env changes.
+
+### Frontend API base
+In `meta-agent-platform-ui/.env` (or Vite env):
+```
 VITE_API_BASE=http://localhost:4000
 ```
 
-### Atlas Forge Integration
+---
 
-- **Meta Bridge Credentials** – Server-side agents that talk to Atlas Forge require `META_AGENT_SECRET` (already referenced in `.env`) and a valid JWT. Set `META_AGENT_JWT` (or `ATLAS_BRIDGE_TOKEN`) to the Supabase access token that should be used for bridge calls. Without it, the MetaCortex bus suppresses `/bridge-notify` fan-out.
-- **HMAC Signing** – Requests to `https://lighdepncfhiecqllmod.supabase.co/functions/v1` now flow through the shared `AtlasBridgeClient`, which signs every call with `X-Agent-Id` and `X-Agent-Signature` (HMAC SHA-256 of `agentId + jwt`). Retry/backoff for `401/429` is built in and GET responses are cached for five minutes.
-- **Built-in Atlas Agents** – The runtime ships specialised agents (`MemoryGraphAgent`, `TaskAgent`, `CalendarAgent`, `FinanceAgent`, `EmailMonitoringAgent`, `AISummarizerAgent`, `AnalyticsAgent`, and `MetaControllerAgent`) that automatically call their assigned Forge endpoints and collaborate via `request_context` / `context_response` bus events. Register them through the dashboard or CLI and provide per-agent bridge credentials under the new `bridge` configuration block.
-- **Dashboard Login** – The dashboard at `http://localhost:3000` now shows an Atlas Forge-themed login screen. Configure `VITE_SUPABASE_SAML_PROVIDER_ID` (or `VITE_SUPABASE_SSO_DOMAIN`) in `.env` to enable the enterprise SAML/Okta option; otherwise only the default Atlas login button is active.
+## Database & migrations
+- Apply migrations: `psql $DATABASE_URL -f migrations/20250108_add_saml_multitenant.sql`
+- Key tables:  
+  - `orgs`, `org_domains` (domain → org routing)  
+  - `saml_configs` (IdP metadata, SP URLs, enforce_sso)  
+  - `saml_sessions`, `saml_audit_logs`  
+  - `users`, `agents`, `tasks`, `forge_embeddings`, etc.
 
-### Dual-Model Router
+---
 
-The runtime now routes every LLM request through a lightweight router that chooses between the local Ollama **mistral:7b** model and OpenAI GPT. Short, low-complexity prompts are served locally, while heavier reasoning falls back to GPT. This hybrid strategy has been reducing paid token usage by **70–90%** in internal testing. Logs expose the selection and latency, e.g.:
+## SAML SSO guide
+**Endpoints**
+- `GET /.well-known/saml/metadata/:orgId` – SP metadata XML (entityID, ACS, certs).
+- `POST /auth/saml/login` – SP-initiated start (resolve org via email domain or `org_id`).
+- `POST /auth/saml/acs` – Assertion Consumer; validates signature, JIT-provisions user, sets `atlas_sso` JWT cookie, redirects.
+- `POST /auth/saml/idp-init` – IdP-initiated.
+- `POST /auth/saml/logout` – clears local session.
+- `GET /auth/saml/session` – returns current SAML JWT payload if present.
 
+**Org routing**
+- Add domains in the SAML modal (Integrations → Okta SAML → Configure) or insert into `org_domains`.
+- If multiple orgs share a domain, login fails with a conflict error.
+
+**JIT provisioning**
+- New assertion email → create user with org, first/last name, role (default `member`), link session.
+
+**Enforce SSO**
+- Toggle in the SAML modal; disables password/magic-link for that org and shows only SSO on login.
+
+### Okta example (local)
+1) In Okta SAML app:
+   - **ACS URL**: `http://localhost:4000/auth/saml/acs`
+   - **Audience/Entity ID**: `http://localhost:3000/saml/metadata`
+   - NameID: EmailAddress.
+2) In the Integrations SAML modal:
+   - IdP Entity ID: e.g., `http://www.okta.com/<id>`
+   - IdP SSO URL: from Okta SSO URL.
+   - IdP Certificate: paste Okta X.509 cert (PEM).
+   - Allowed email domains: your test domain(s).
+3) Optional: RelayState in Okta = `http://localhost:3000/`.
+4) Save, then “Test SSO”.
+
+### Azure AD/Ping
+Use equivalent SSO URL + certificate from metadata; set Audience to `SAML_SP_ENTITY_ID` and ACS to `SAML_SP_ACS_BASE_URL`.
+
+### Redirects
+- RelayState is used if on the same origin as `APP_BASE_URL`; otherwise falls back to `SAML_DEFAULT_REDIRECT`.
+- If you land on `:4000`, re-check Audience/ACS in IdP and confirm `APP_BASE_URL`/`SAML_DEFAULT_REDIRECT` are set and server restarted.
+
+---
+
+## Features & UI
+- **Login**: Email-based SSO discovery; enforce-SSO hides password options.
+- **Integrations**: SAML modal (IdP metadata URL, SSO URL, cert, domains, enforce toggle, copyable SP Entity ID/ACS/metadata, download XML, Test SSO), Slack/Jira connectors.
+- **Agents/Tasks**: CRUD, task queue, coordinator loop.
+- **Exhausts**: LogStreamView/TerminalViewer for live agent output.
+- **Licensing**: License status and usage/quotas.
+
+---
+
+## Operations & security
+- **Secrets**: Keep SAML private key/cert and API keys outside VCS; inject via env/secret manager.
+- **HTTPS**: Use HTTPS in production for APP/API and SAML endpoints.
+- **CORS**: Restrict `ALLOWED_ORIGINS` to trusted UI hosts.
+- **Backups**: Regular Postgres backups; run migrations during deploy.
+- **Auditing**: SAML events logged to `saml_audit_logs`; sessions in `saml_sessions`.
+
+---
+
+## Useful commands
+- Build server: `cd server && npm run build`
+- Build UI: `cd meta-agent-platform-ui && npm run build`
+- Count embeddings:
+```bash
+cd server
+node -e "import pkg from 'pg'; const c=new pkg.Client({connectionString:process.env.DATABASE_URL||'postgres://postgres:postgres@localhost:5432/postgres'}); (async()=>{await c.connect(); const r=await c.query('select count(*) from forge_embeddings'); console.log(r.rows[0]); await c.end();})();"
 ```
-[router] model=local time=186ms tokens≈42
-[router] model=gpt time=912ms tokens≈128
+- Reset local SP fields:
+```bash
+docker compose exec -T db psql -U postgres -d postgres -c "\
+UPDATE saml_configs SET \
+ sp_entity_id='http://localhost:3000/saml/metadata', \
+ sp_acs_url='http://localhost:4000/auth/saml/acs', \
+ sp_metadata_url='http://localhost:4000/.well-known/saml/metadata';"
 ```
 
-Override behaviour by exporting `FORCE_LOCAL=true` or `FORCE_GPT=true` in `.env`. Streaming is supported on both backends, so existing token-by-token UIs continue to function.
+---
 
-## Services
+## Troubleshooting
+- **Audience mismatch**: Align IdP Audience/Entity ID with `sp_entity_id`.
+- **Redirect to :4000**: Ensure `APP_BASE_URL`/`SAML_DEFAULT_REDIRECT` point to UI; restart server; RelayState must share UI origin.
+- **No SAML config**: Fill `saml_configs` with correct `idp_entity_id`/SSO URL/cert; ensure `org_domains` maps the email domain.
+- **InResponseTo errors**: Local testing uses relaxed validation; re-enable strict mode if required.
+- **Cannot GET /**: API host serves JSON; ensure redirects target the UI host (RelayState or default redirect).
 
-- **db** – Postgres 15 with pgvector extension enabled
-- **server** – Node/Express API with the coordinator loop
-- **frontend** – React + TypeScript dashboard
-- **forge** – Next.js authentication scaffold integrating Supabase/Atlas SSO (see `forge/README.md`)
-- **nginx** – reverse proxy stitching `/api` to the server and `/` to the UI
+---
 
-## Agent Workflow
-
-1. Create agents through the REST API, dashboard modal, or `/create` console command.
-2. Submit tasks via `/agents/:id/task`, `/tasks/assign`, or the `/run` console command.
-3. The coordinator loop resolves pending tasks, calls GPT-5 (or fallback text reasoning), executes `Agent.act`, and persists summaries + embeddings into `agent_memory`.
-4. The dashboard polls the API to display live status, task throughput, and recent memory nodes for each agent.
-
-## Slash Commands
-
-The command console supports:
-
-- `/create FinanceAgent with tools: Gmail, Notion`
-- `/set goal "Manage invoices and alert overdue clients"`
-- `/run FinanceAgent "Summarize this month's cash flow"`
-
-Command responses appear in the console history and immediately update the dashboard.
+## License
+See LICENSE or contact the Atlas team for enterprise terms.
