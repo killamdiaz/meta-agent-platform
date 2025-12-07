@@ -3,9 +3,11 @@ import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 import { config } from '../config.js';
 import { pool } from '../db.js';
+import { approximateTokenCount, detectProvider, logUsage } from '../services/ModelRouterWrapper.js';
 
 const router = express.Router();
 const client = new OpenAI({ apiKey: config.openAiApiKey });
+const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
 
 const atlasSystemPrompt = `You are **Atlas Engine**, the unified intelligence that powers Atlas OS, Atlas Forge, and all connected agents, tools, and integrations.
 
@@ -41,7 +43,7 @@ Always think deeply, but answer with the minimum necessary words.`;
 
 async function embedText(text: string) {
   const resp = await client.embeddings.create({
-    model: 'text-embedding-3-small',
+    model: EMBEDDING_MODEL,
     input: text,
   });
   return resp.data?.[0]?.embedding;
@@ -118,6 +120,8 @@ router.post('/send', async (req, res) => {
     return res.status(400).json({ error: 'message is required' });
   }
   const orgId = (req.headers['x-org-id'] as string) || (req.query.org_id as string) || config.defaultOrgId || null;
+  const accountId = (req.headers['x-account-id'] as string) || (req.query.account_id as string) || null;
+  const userId = (req.headers['x-user-id'] as string) || null;
 
   const convId = conversationId || uuidv4();
   const messageId = uuidv4();
@@ -127,31 +131,36 @@ router.post('/send', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
 
   try {
-    const intent = await classifyIntent(message);
-    const shouldSearchKb = intent === 'ZSCALER';
-    const kbMatches = shouldSearchKb ? await searchKb(message, orgId) : [];
-    const kbContext = shouldSearchKb
-      ? kbMatches
-          .map(
-            (row: any, idx: number) =>
-              `KB Source ${idx + 1}: ${row.source_id} (${row.source_type})${row.url ? ` [${row.url}]` : ''}\nScore: ${row.score?.toFixed(3)}\nContent:\n${row.content}`,
-          )
-          .join('\n\n')
-      : '';
+    // Run intent classification and embedding lookup in parallel to reduce latency.
+    const [intent, kbMatches] = await Promise.all([classifyIntent(message), searchKb(message, orgId)]);
+    const kbContext =
+      kbMatches && kbMatches.length
+        ? kbMatches
+            .map(
+              (row: any, idx: number) =>
+                `KB Source ${idx + 1}: ${row.source_id} (${row.source_type})${row.url ? ` [${row.url}]` : ''}\nScore: ${row.score?.toFixed(3)}\nContent:\n${row.content}`,
+            )
+            .join('\n\n')
+        : '';
 
     const stream = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       stream: true,
       messages: [
         { role: 'system', content: atlasSystemPrompt },
-        shouldSearchKb
+        intent === 'ZSCALER'
           ? {
               role: 'system',
               content:
-                'You MUST prioritize Zscaler context. Cite matched KB sources inline as [source_id](url), and provide a Sources section at the end. If no matches, say "No sources found."',
+                'You MUST prioritize Zscaler context. Cite matched KB sources inline as [source_id](url), and provide a Sources section at the end when sources exist. If no sources, skip the Sources section.',
             }
           : null,
-        shouldSearchKb && kbContext ? { role: 'system', content: `KB Context:\n${kbContext}` } : null,
+        {
+          role: 'system',
+          content:
+            'If KB context is provided, cite matched KB sources inline as [source_id](url) and include a Sources section only when sources exist. If no sources, do not mention missing sources; answer concisely.',
+        },
+        kbContext ? { role: 'system', content: `KB Context:\n${kbContext}` } : null,
         { role: 'user', content: message },
       ].filter(Boolean) as any,
     });
@@ -164,6 +173,22 @@ router.post('/send', async (req, res) => {
         res.write(`event: token\ndata: ${delta}\n\n`);
       }
     }
+
+    // Log usage for billing
+    const promptTokens = approximateTokenCount(message);
+    const completionTokens = approximateTokenCount(assembled);
+    await logUsage({
+      org_id: orgId,
+      account_id: accountId,
+      user_id: userId,
+      source: 'chat',
+      agent_name: 'Atlas Engine',
+      model: 'gpt-4o-mini',
+      provider: detectProvider('gpt-4o-mini'),
+      promptTokens,
+      completionTokens,
+      metadata: { conversationId: convId },
+    });
 
     res.write(`event: done\ndata: {"messageId":"${messageId}","conversationId":"${convId}"}\n\n`);
     res.end();

@@ -1,24 +1,44 @@
 import { useEffect, useMemo } from "react";
-import { Network, LayoutDashboard, MessageSquare, Settings, HelpCircle, Brain, Users, Radio, Boxes, Database, Coins } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import {
+  Network,
+  LayoutDashboard,
+  MessageSquare,
+  Settings,
+  HelpCircle,
+  Brain,
+  Users,
+  Radio,
+  Boxes,
+  Database,
+  Coins,
+  Activity,
+} from "lucide-react";
+import { NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { formatDistanceToNowStrict } from "date-fns";
 import { useTokenStore } from "@/store/tokenStore";
 import { useAuth } from "@/context/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const navigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
   { name: "Overview", href: "/", icon: LayoutDashboard },
-  { name: "Integrations", href: "/integrations", icon: Boxes },
-  { name: "Data Sources", href: "/data-sources", icon: Database },
   { name: "Command Console", href: "/console", icon: MessageSquare },
+  { name: "Exhausts", href: "/exhausts", icon: Activity },
   { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
 ];
 
 const bottomNav = [
+  { name: "Integrations", href: "/integrations", icon: Boxes },
+  { name: "Data Sources", href: "/data-sources", icon: Database },
   { name: "Settings", href: "/settings", icon: Settings },
   { name: "Billing", href: "/billing", icon: Coins },
   { name: "Help", href: "/help", icon: HelpCircle },
@@ -34,7 +54,7 @@ export function AppSidebar() {
   const totalTokens = useTokenStore((state) => state.totalTokens);
   const tokensLastUpdated = useTokenStore((state) => state.lastUpdated);
   const setTokenUsage = useTokenStore((state) => state.setUsage);
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
 
   useEffect(() => {
@@ -92,6 +112,7 @@ export function AppSidebar() {
     const email = user.email ?? "";
     return { name, email };
   }, [user]);
+  const navigate = useNavigate();
 
   return (
     <div className="flex h-screen w-64 flex-shrink-0 flex-col bg-sidebar">
@@ -172,10 +193,35 @@ export function AppSidebar() {
           <div className="text-xs text-muted-foreground">Uptime {usage.uptime}</div>
         )}
         {profile && (
-          <div className="mt-4 rounded-xl border border-sidebar-border bg-sidebar-accent/30 p-3">
-            <div className="mt-2 text-sm font-medium text-foreground">{profile.name}</div>
-            <div className="text-xs text-muted-foreground">{profile.email}</div>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="mt-4 w-full text-left rounded-xl border border-sidebar-border bg-sidebar-accent/30 p-3 hover:bg-sidebar-accent transition-colors"
+              >
+                <div className="mt-2 text-sm font-medium text-foreground">{profile.name}</div>
+                <div className="text-xs text-muted-foreground">{profile.email}</div>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={() => {
+                  navigate("/settings");
+                }}
+              >
+                View profile
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-red-500 focus:text-red-500"
+                onClick={async () => {
+                  await signOut();
+                  navigate("/login");
+                }}
+              >
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
     </div>

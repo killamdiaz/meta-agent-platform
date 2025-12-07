@@ -34,7 +34,7 @@ router.get('/status', async (req, res, next) => {
       res.status(404).json({ message: 'No license found' });
       return;
     }
-    const status = await validateLicenseKey(license.license_key);
+    const status = await validateLicenseKey(license.license_key, orgId || license.customer_id);
     res.json({
       license_id: license.id,
       customer_name: license.customer_name,
@@ -57,7 +57,8 @@ router.post('/validate', async (req, res, next) => {
       res.status(400).json({ message: 'license_key is required' });
       return;
     }
-    const status = await validateLicenseKey(licenseKey);
+    const orgId = (req.headers['x-org-id'] as string) || (req.query.org_id as string) || '';
+    const status = await validateLicenseKey(licenseKey, orgId);
     res.json(status);
   } catch (error) {
     next(error);
@@ -71,7 +72,8 @@ router.post('/refresh', async (req, res, next) => {
       res.status(400).json({ message: 'license_key is required' });
       return;
     }
-    const status = await validateLicenseKey(licenseKey);
+    const orgId = (req.headers['x-org-id'] as string) || (req.query.org_id as string) || '';
+    const status = await validateLicenseKey(licenseKey, orgId);
     res.json(status);
   } catch (error) {
     next(error);
@@ -118,28 +120,50 @@ router.post('/apply', async (req, res, next) => {
       console.warn('[license] customer_id alter skipped', msg);
     }
 
+    // Preserve existing limits/names when not provided. If none exist, require explicit limits to avoid silent defaults.
+    const existingByKey = await pool.query('SELECT * FROM licenses WHERE license_key = $1 LIMIT 1', [licenseKey]);
+    const existingByCustomer =
+      existingByKey.rows[0] ||
+      (await pool.query('SELECT * FROM licenses WHERE customer_id = $1 ORDER BY issued_at DESC LIMIT 1', [keyCustomerId])).rows[0];
+
+    const seatsVal =
+      typeof req.body?.max_seats === 'number'
+        ? req.body.max_seats
+        : existingByCustomer?.max_seats;
+    const tokensVal =
+      typeof req.body?.max_tokens === 'number'
+        ? req.body.max_tokens
+        : existingByCustomer?.max_tokens;
+    const nameVal = customerName ?? existingByCustomer?.customer_name ?? keyCustomerId;
+
+    if (seatsVal == null || tokensVal == null) {
+      return res.status(400).json({
+        message: 'License apply requires max_seats and max_tokens when no existing license is found for this key/customer.',
+      });
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO licenses (customer_name, customer_id, issued_at, expires_at, max_seats, max_tokens, license_key, active)
-       VALUES (COALESCE($1, 'Unknown'), $2, NOW(), $3, COALESCE($4, 1000), COALESCE($5, 1000000000), $6, TRUE)
+       VALUES (COALESCE($1, 'Unknown'), $2, NOW(), $3, $4, $5, $6, TRUE)
        ON CONFLICT (license_key) DO UPDATE
          SET customer_name = COALESCE(EXCLUDED.customer_name, licenses.customer_name),
              customer_id = EXCLUDED.customer_id,
              expires_at = EXCLUDED.expires_at,
-             max_seats = EXCLUDED.max_seats,
-             max_tokens = EXCLUDED.max_tokens,
+             max_seats = COALESCE(EXCLUDED.max_seats, licenses.max_seats),
+             max_tokens = COALESCE(EXCLUDED.max_tokens, licenses.max_tokens),
              active = TRUE
        RETURNING *`,
       [
-        customerName,
+        nameVal,
         keyCustomerId,
         expiresDate.toISOString(),
-        req.body?.max_seats ?? 1000,
-        req.body?.max_tokens ?? 1000000000,
+        seatsVal,
+        tokensVal,
         licenseKey,
       ],
     );
 
-    const status = await validateLicenseKey(rows[0].license_key);
+    const status = await validateLicenseKey(rows[0].license_key, orgId || keyCustomerId);
     res.json(status);
   } catch (error) {
     next(error);

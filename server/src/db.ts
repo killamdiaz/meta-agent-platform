@@ -3,14 +3,78 @@ const { Pool } = pkg;
 import { config } from './config.js';
 import crypto from 'crypto';
 
+const connectionString = config.databaseUrl;
+
 export const pool = new Pool({
-  connectionString: config.databaseUrl
+  connectionString
 });
 
+async function waitForDb(retries = 10, delayMs = 3000) {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      await pool.query('SELECT 1');
+      return;
+    } catch (err) {
+      attempt += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[db] connection attempt ${attempt} failed (${message}). DSN=${connectionString}`);
+      if (attempt >= retries) {
+        throw err;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 export async function initDb() {
+  await waitForDb();
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
     CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE TABLE IF NOT EXISTS orgs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name TEXT NOT NULL,
+      slug TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS org_domains (
+      org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+      domain TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (org_id, domain)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_domains_domain ON org_domains(domain);
+
+    CREATE TABLE IF NOT EXISTS saml_configs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+      idp_metadata_url TEXT,
+      idp_entity_id TEXT,
+      idp_sso_url TEXT,
+      idp_certificate TEXT,
+      sp_entity_id TEXT,
+      sp_acs_url TEXT,
+      sp_metadata_url TEXT,
+      enforce_sso BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(org_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS saml_audit_logs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID REFERENCES orgs(id) ON DELETE SET NULL,
+      user_email TEXT,
+      event_type TEXT NOT NULL,
+      details JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_saml_audit_org ON saml_audit_logs(org_id);
+
     CREATE TABLE IF NOT EXISTS agents (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       name TEXT NOT NULL,
@@ -164,7 +228,7 @@ export async function initDb() {
       source_type TEXT NOT NULL,
       source_id TEXT,
       content TEXT NOT NULL,
-      embedding VECTOR(1536),
+      embedding VECTOR(3072),
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       visibility_scope TEXT DEFAULT 'org',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -178,14 +242,7 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_controller_approvals_status ON controller_approvals(status);
     CREATE INDEX IF NOT EXISTS idx_agent_configs_agent_id ON agent_configs(agent_id);
     CREATE INDEX IF NOT EXISTS idx_forge_embeddings_org_source ON forge_embeddings(org_id, source_type);
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_forge_embeddings_embedding'
-      ) THEN
-        CREATE INDEX idx_forge_embeddings_embedding ON forge_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-      END IF;
-    END$$;
+    -- Skip ANN index creation: pgvector caps HNSW/IVFFlat at 2000 dims and 3-large outputs 3072.
 
     CREATE TABLE IF NOT EXISTS forge_token_usage (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -262,27 +319,68 @@ export async function initDb() {
     ALTER TABLE licenses
       ALTER COLUMN customer_id TYPE TEXT USING customer_id::text;
 
-    -- minimal users table to support license linkage if not present
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       email TEXT,
-      license_id UUID REFERENCES licenses(id)
+      license_id UUID REFERENCES licenses(id),
+      org_id UUID REFERENCES orgs(id) ON DELETE SET NULL,
+      first_name TEXT,
+      last_name TEXT,
+      role TEXT DEFAULT 'member',
+      auth_provider TEXT,
+      attributes JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      last_login_at TIMESTAMPTZ
     );
     ALTER TABLE users ADD COLUMN IF NOT EXISTS license_id UUID REFERENCES licenses(id);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES orgs(id) ON DELETE SET NULL;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'member';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_users_email_org ON users(email, org_id);
+    CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
+    CREATE TABLE IF NOT EXISTS saml_sessions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      org_id UUID REFERENCES orgs(id) ON DELETE SET NULL,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      name_id TEXT,
+      session_index TEXT,
+      relay_state TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_saml_sessions_org ON saml_sessions(org_id);
+    CREATE INDEX IF NOT EXISTS idx_saml_sessions_user ON saml_sessions(user_id);
   `);
 
-  if (process.env.NODE_ENV !== 'production') {
-    const devCustomerId = process.env.DEFAULT_ORG_ID || 'dev-org';
-    const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-    const signature = crypto.createHmac('sha256', config.licenseSecret).update(`${devCustomerId}:${expires}`).digest('hex');
-    const devKey = `${devCustomerId}:${expires}:${signature}`;
+  if (config.defaultOrgId) {
     await pool.query(
-      `INSERT INTO licenses (customer_name, customer_id, issued_at, expires_at, max_seats, max_tokens, license_key, active)
-       VALUES ($1, $2, NOW(), NOW() + interval '365 days', 1000, 1000000000, $3, TRUE)
-       ON CONFLICT (license_key) DO NOTHING`,
-      ['Development License', devCustomerId, devKey],
+      `INSERT INTO orgs (id, name)
+       VALUES ($1, $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [config.defaultOrgId, 'Default Org'],
     );
   }
+
+  // if (process.env.NODE_ENV !== 'production') {
+  //   const devCustomerId = process.env.DEFAULT_ORG_ID || 'dev-org';
+  //   const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  //   const signature = crypto.createHmac('sha256', config.licenseSecret).update(`${devCustomerId}:${expires}`).digest('hex');
+  //   const devKey = `${devCustomerId}:${expires}:${signature}`;
+  //   await pool.query(
+  //     `INSERT INTO licenses (customer_name, customer_id, issued_at, expires_at, max_seats, max_tokens, license_key, active)
+  //      VALUES ($1, $2, NOW(), NOW() + interval '365 days', 1000, 1000000000, $3, TRUE)
+  //      ON CONFLICT (license_key) DO NOTHING`,
+  //     ['Development License', devCustomerId, devKey],
+  //   );
+  // }
 }
 
 export async function withTransaction<T>(fn: (client: import('pg').PoolClient) => Promise<T>) {

@@ -34,7 +34,8 @@ export async function handleRagMessage(payload: RagHandlerInput) {
   });
 
   const footer = buildCitationFooter(answer.citations);
-  const reply = `${answer.answer}${footer}`;
+  const hasSourcesSection = typeof answer.answer === 'string' && answer.answer.toLowerCase().includes('sources:');
+  const reply = hasSourcesSection ? answer.answer : `${answer.answer}${footer}`;
 
   const usagePayload = {
     tokens_prompt: answer.usage.prompt_tokens,

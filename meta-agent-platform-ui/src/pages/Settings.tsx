@@ -38,6 +38,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [newLicenseKey, setNewLicenseKey] = useState(() => localStorage.getItem("forge_license_key") ?? "");
   const [showApply, setShowApply] = useState(false);
+  const [usageTokens, setUsageTokens] = useState<number | null>(null);
 
   const loadStatus = async () => {
     if (!orgId) return;
@@ -56,6 +57,20 @@ export default function Settings() {
     }
   };
 
+  // Pull actual usage from billing summary for accurate token consumption
+  useEffect(() => {
+    if (!orgId) return;
+    api
+      .fetchUsageSummary(orgId)
+      .then((summary) => {
+        setUsageTokens(Number(summary?.total_tokens ?? 0));
+      })
+      .catch((err) => {
+        console.warn("[settings] usage summary", err);
+        setUsageTokens(null);
+      });
+  }, [orgId]);
+
   useEffect(() => {
     loadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,14 +80,11 @@ export default function Settings() {
     if (!newLicenseKey || !orgId) return;
     setLoading(true);
     try {
-      const status = await api.applyLicense(orgId, newLicenseKey.trim());
-      setLicense(status as any);
+      await api.applyLicense(orgId, newLicenseKey.trim());
+      await loadStatus();
       toast.success("License applied");
       setShowApply(false);
-      if ((status as any)?.license_key) {
-        localStorage.setItem("forge_license_key", (status as any).license_key);
-        setNewLicenseKey((status as any).license_key);
-      }
+      localStorage.setItem("forge_license_key", newLicenseKey.trim());
     } catch (error) {
       console.error(error);
       toast.error("Failed to apply license");
@@ -86,8 +98,8 @@ export default function Settings() {
     if (!key) return;
     setLoading(true);
     try {
-      const status = await api.validateLicense(key);
-      setLicense((prev) => ({ ...(prev ?? {}), ...(status as any) }));
+      await api.validateLicense(key);
+      await loadStatus();
       toast.success("License validated");
     } catch (error) {
       console.error(error);
@@ -102,8 +114,8 @@ export default function Settings() {
     if (!key) return;
     setLoading(true);
     try {
-      const status = await api.refreshLicense(key);
-      setLicense((prev) => ({ ...(prev ?? {}), ...(status as any) }));
+      await api.refreshLicense(key);
+      await loadStatus();
       toast.success("License refreshed");
     } catch (error) {
       console.error(error);
@@ -117,10 +129,12 @@ export default function Settings() {
   const statusVariant = license?.valid ? "default" : license ? "destructive" : "secondary";
   const seatsUsed = Number(license?.seats_used ?? 0);
   const seatsTotal = Number(license?.max_seats ?? 0);
-  const tokensUsed = Number(license?.tokens_used ?? 0);
+  const tokensUsedFromLicense = Number(license?.tokens_used ?? 0);
+  const tokensUsed = usageTokens ?? tokensUsedFromLicense;
   const tokensTotal = Number(license?.max_tokens ?? 0);
   const seatsRemaining = seatsTotal ? Math.max(seatsTotal - seatsUsed, 0) : 0;
   const tokensRemaining = tokensTotal ? Math.max(tokensTotal - tokensUsed, 0) : 0;
+  const tokensUsage = tokensTotal ? Math.min(tokensUsed / tokensTotal, 1) : 0;
 
   return (
     <div className="p-8 space-y-6 animate-fade-in">
@@ -170,10 +184,10 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Tokens</p>
               <p className="text-lg font-semibold">
-                {license ? `${tokensUsed} / ${tokensTotal || 0}` : "—"}
+                {license ? `${tokensUsed.toLocaleString()} / ${tokensTotal.toLocaleString()}` : "—"}
               </p>
               <p className="text-xs text-muted-foreground">
-                Remaining: {tokensRemaining.toLocaleString()}
+                Remaining: {tokensRemaining.toLocaleString()} ({Math.round(tokensUsage * 100)}% used)
               </p>
             </div>
           </div>

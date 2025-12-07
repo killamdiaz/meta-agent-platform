@@ -1,9 +1,24 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
+import { api, apiBaseUrl } from '@/lib/api';
+
+type SamlUser = {
+  id: string;
+  email: string;
+  org_id?: string;
+  role?: string;
+  provider?: string;
+  first_name?: string;
+  last_name?: string;
+  user_metadata?: Record<string, unknown>;
+  app_metadata?: Record<string, unknown>;
+};
+
+type AuthUser = User | SamlUser | null;
 
 interface AuthContextValue {
-  user: User | null;
+  user: AuthUser;
   session: Session | null;
   loading: boolean;
   signOut: () => Promise<void>;
@@ -13,7 +28,10 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [samlUser, setSamlUser] = useState<SamlUser | null>(null);
+  const [checkedSupabase, setCheckedSupabase] = useState(false);
+  const [checkedSaml, setCheckedSaml] = useState(false);
+  const loading = !checkedSupabase || !checkedSaml;
 
   useEffect(() => {
     let active = true;
@@ -30,9 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       })
       .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setCheckedSupabase(true);
       });
 
     const {
@@ -47,19 +63,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .fetchSamlSession()
+      .then((result) => {
+        if (!cancelled) {
+          setSamlUser(result.user);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSamlUser(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCheckedSaml(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await Promise.allSettled([
+      supabase.auth.signOut(),
+      fetch(`${apiBaseUrl}/auth/saml/logout`, { method: 'POST', credentials: 'include' }),
+    ]);
     setSession(null);
+    setSamlUser(null);
   };
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      user: session?.user ?? null,
+      user: samlUser ?? session?.user ?? null,
       session,
       loading,
       signOut,
     }),
-    [loading, session],
+    [loading, session, samlUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

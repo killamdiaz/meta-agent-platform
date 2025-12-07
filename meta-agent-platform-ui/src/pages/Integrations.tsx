@@ -1,12 +1,18 @@
-import { useEffect, useState, type ElementType } from "react";
-import { ShieldCheck, KeyRound, Slack, Github, GitBranch, BookOpen, Boxes, Cloud, Bot, Workflow } from "lucide-react";
+import { useCallback, useEffect, useState, type ElementType } from "react";
+import { ShieldCheck, KeyRound, Slack, Github, GitBranch, BookOpen, Boxes, Cloud, Bot, Workflow, Copy, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
-import { api, API_BASE } from "@/lib/api";
+import { api, API_BASE, apiBaseUrl } from "@/lib/api";
 
 interface IntegrationCard {
   id: string;
@@ -94,6 +100,237 @@ const integrationCards: IntegrationCard[] = [
   },
 ];
 
+function SamlConfigModal({
+  open,
+  onOpenChange,
+  orgId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  orgId: string | null;
+}) {
+  const [form, setForm] = useState({
+    idp_metadata_url: "",
+    idp_certificate: "",
+    idp_sso_url: "",
+    sp_entity_id: "",
+    sp_acs_url: "",
+    sp_metadata_url: "",
+    enforce_sso: false,
+    domainsText: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const metadataUrl = form.sp_metadata_url || (orgId ? `${API_BASE}/.well-known/saml/metadata/${orgId}` : "");
+  const acsUrl = form.sp_acs_url || `${apiBaseUrl}/auth/saml/acs`;
+  const entityId = form.sp_entity_id || "atlas-forge-sp";
+
+  const hydrate = useCallback(async () => {
+    if (!open || !orgId) return;
+    setLoading(true);
+    try {
+      const cfg = await api.fetchSamlConfig(orgId);
+      setForm({
+        idp_metadata_url: cfg.idp_metadata_url ?? "",
+        idp_certificate: cfg.idp_certificate ?? "",
+        idp_sso_url: cfg.idp_sso_url ?? "",
+        sp_entity_id: cfg.sp_entity_id ?? entityId,
+        sp_acs_url: cfg.sp_acs_url ?? acsUrl,
+        sp_metadata_url: cfg.sp_metadata_url ?? metadataUrl,
+        enforce_sso: cfg.enforce_sso ?? false,
+        domainsText: (cfg.domains ?? []).join(", "),
+      });
+    } catch (error) {
+      console.warn("[saml] load config failed", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [open, orgId, entityId, acsUrl, metadataUrl]);
+
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
+
+  const handleCopy = useCallback((value: string) => {
+    if (!value) return;
+    void navigator.clipboard.writeText(value);
+    toast.success("Copied to clipboard");
+  }, []);
+
+  const handleSave = async () => {
+    if (!orgId) return;
+    setSaving(true);
+    try {
+      const domains = form.domainsText
+        .split(",")
+        .map((d) => d.trim().toLowerCase())
+        .filter(Boolean);
+      const { domainsText: _discard, ...payload } = form;
+      const saved = await api.saveSamlConfig(orgId, { ...payload, domains });
+      setForm((prev) => ({
+        ...prev,
+        ...saved,
+        sp_entity_id: saved.sp_entity_id ?? prev.sp_entity_id,
+        sp_acs_url: saved.sp_acs_url ?? prev.sp_acs_url,
+        sp_metadata_url: saved.sp_metadata_url ?? prev.sp_metadata_url,
+        domainsText: domains.join(", "),
+      }));
+      toast.success("SAML settings saved");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to save SAML settings");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    if (!orgId) return;
+    setSaving(true);
+    try {
+      const { redirectUrl } = await api.startSamlLogin({
+        org_id: orgId,
+        relayState: window.location.origin,
+      });
+      window.location.href = redirectUrl;
+    } catch (error) {
+      console.error(error);
+      toast.error("Unable to start SSO test");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl w-[95vw] rounded-3xl p-8">
+        <DialogHeader className="space-y-2">
+          <DialogTitle className="text-2xl">Configure SAML SSO</DialogTitle>
+          <DialogDescription>
+            Provide your IdP metadata URL and share the Service Provider details with your identity team.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>IdP Metadata URL</Label>
+              <Input
+                placeholder="https://your-idp/.well-known/saml.xml"
+                value={form.idp_metadata_url}
+                onChange={(e) => setForm((prev) => ({ ...prev, idp_metadata_url: e.target.value }))}
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">We will fetch the SSO URL and certificate from this XML.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>IdP SSO URL (Entry Point)</Label>
+              <Input
+                placeholder="https://your-idp/idp/profile/SAML2/Redirect/SSO"
+                value={form.idp_sso_url}
+                onChange={(e) => setForm((prev) => ({ ...prev, idp_sso_url: e.target.value }))}
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">Direct login URL from your IdP. Required if metadata fetch is blocked.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Allowed email domains</Label>
+              <Input
+                placeholder="company.com, subsidiary.io"
+                value={form.domainsText}
+                onChange={(e) => setForm((prev) => ({ ...prev, domainsText: e.target.value }))}
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">Used to map login emails to this organization automatically.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>IdP Certificate</Label>
+              <Textarea
+                rows={4}
+                placeholder="-----BEGIN CERTIFICATE-----"
+                value={form.idp_certificate}
+                onChange={(e) => setForm((prev) => ({ ...prev, idp_certificate: e.target.value }))}
+                disabled={saving}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Enforce SSO</p>
+                <p className="text-xs text-muted-foreground">Disable password or magic-link login for this org.</p>
+              </div>
+              <Switch
+                checked={form.enforce_sso}
+                onCheckedChange={(checked) => setForm((prev) => ({ ...prev, enforce_sso: checked }))}
+                disabled={saving}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-4 rounded-2xl border border-border/70 bg-muted/30 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-semibold">Service Provider Details</p>
+                <p className="text-sm text-muted-foreground">Copy these into Okta, Azure AD, or Ping.</p>
+              </div>
+              <Button variant="secondary" size="sm" asChild>
+                <a href={metadataUrl} download>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download XML
+                </a>
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label>SP Entity ID</Label>
+                <div className="flex items-center gap-2">
+                  <Input value={entityId} readOnly className="font-mono" />
+                  <Button variant="outline" size="icon" onClick={() => handleCopy(entityId)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>ACS URL</Label>
+                <div className="flex items-center gap-2">
+                  <Input value={acsUrl} readOnly className="font-mono" />
+                  <Button variant="outline" size="icon" onClick={() => handleCopy(acsUrl)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>SP Metadata URL</Label>
+                <div className="flex items-center gap-2">
+                  <Input value={metadataUrl} readOnly className="font-mono" />
+                  <Button variant="outline" size="icon" onClick={() => handleCopy(metadataUrl)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={handleSave} disabled={saving || loading || !orgId}>
+                {saving ? "Saving…" : "Save settings"}
+              </Button>
+              <Button variant="outline" onClick={handleTest} disabled={saving || !orgId}>
+                Test SSO
+              </Button>
+              <Button variant="ghost" onClick={hydrate} disabled={loading}>
+                Reload
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Integrations() {
   const { user } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
@@ -102,6 +339,7 @@ export default function Integrations() {
   const [slackStatus, setSlackStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
   const [jiraStatus, setJiraStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
   const [statusLoading, setStatusLoading] = useState(false);
+  const [showSamlModal, setShowSamlModal] = useState(false);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -157,7 +395,7 @@ export default function Integrations() {
         setJiraStatus("inactive");
         toast.success("Jira disconnected");
       } else if (integration.id === "okta-saml") {
-        window.location.href = "/settings/saml";
+        setShowSamlModal(true);
       } else if (integration.id === "slack") {
         const orgQuery = orgId ? `?org_id=${encodeURIComponent(orgId)}` : "";
         window.location.href = appendLicense(`${API_BASE}/connectors/slack/api/install${orgQuery}`);
@@ -260,6 +498,7 @@ export default function Integrations() {
           );
         })}
       </div>
+      <SamlConfigModal open={showSamlModal} onOpenChange={setShowSamlModal} orgId={orgId} />
     </div>
   );
 }

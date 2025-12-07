@@ -14,7 +14,8 @@ export interface IngestionRecord {
   visibilityScope?: VisibilityScope;
 }
 
-const DEFAULT_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+const DEFAULT_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
+const EMBEDDING_DIMENSION = 3072;
 
 function normalizeContent(content: string) {
   return content.replace(/\s+/g, ' ').trim();
@@ -38,7 +39,7 @@ export function chunkText(text: string, size = 1200, overlap = 200) {
 }
 
 async function deterministicEmbedding(text: string): Promise<number[]> {
-  const dimensions = 1536;
+  const dimensions = EMBEDDING_DIMENSION;
   const values = new Array(dimensions).fill(0);
   for (let i = 0; i < text.length; i += 1) {
     const code = text.charCodeAt(i);

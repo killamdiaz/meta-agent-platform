@@ -339,6 +339,25 @@ router.get('/issues/:key', async (req, res) => {
   }
 });
 
+router.post('/issues/ingest', async (req, res) => {
+  try {
+    const orgId = resolveOrgId(req);
+    const forgeUserId = resolveAccountId(req);
+    const issue = req.body?.issue;
+    if (!orgId || !issue) return res.status(400).json({ message: 'org_id and issue required' });
+    const statusName = (issue.fields?.status?.name || '').toLowerCase();
+    const isClosed = ['done', 'resolved', 'closed'].some((s) => statusName.includes(s));
+    if (!isClosed) {
+      return res.status(200).json({ message: 'skipped_ingest_non_closed' });
+    }
+    await ingestJiraIssue(issue, orgId, forgeUserId);
+    res.json({ message: 'ingested' });
+  } catch (error: any) {
+    console.error('[jira ingest] failed', error);
+    res.status(500).json({ message: 'Failed to ingest issue' });
+  }
+});
+
 router.post('/issues', async (req, res) => {
   try {
     const orgId = resolveOrgId(req);

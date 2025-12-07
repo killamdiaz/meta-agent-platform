@@ -299,7 +299,8 @@ router.post('/', async (req, res, next) => {
         const answer = await ragAnswer({
           orgId,
           question,
-          sources: ['jira'],
+          // Allow both Jira tickets and general KB to be retrieved for troubleshooting.
+          sources: undefined,
           limit: 8
         });
         if ((!answer.citations || answer.citations.length === 0) && collectedIssues.length > 0) {

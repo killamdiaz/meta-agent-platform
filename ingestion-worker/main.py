@@ -8,20 +8,26 @@ from prometheus_client import Counter, Gauge, start_http_server
 
 import crawler
 import db
+import hashlib
 
 load_dotenv(dotenv_path="../.env")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+EMBEDDING_MODEL = "text-embedding-3-large"
+EMBEDDING_DIMENSION = 3072
+MODEL_INPUT_PRICE_PER_1K = {
+    "text-embedding-3-large": 0.00013,
+}
+
 CRAWL_ADDITIONAL_PATHS = [p.strip() for p in os.environ.get("CRAWL_ADDITIONAL_PATHS", "").split(',') if p.strip()]
 CRAWL_MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "50"))
-OPENAI_EMBEDDING_MODEL = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 POLL_INTERVAL = int(os.environ.get("INGESTION_POLL_MS", "5000"))
 
 client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-EMBED_INPUT_PRICE_PER_1K = float(os.environ.get("OPENAI_EMBED_INPUT_COST_PER_1K", 0.00002))
+EMBED_INPUT_PRICE_OVERRIDE = os.environ.get("OPENAI_EMBED_INPUT_COST_PER_1K")
 
 requests_total = Counter("requests_total", "Total ingestion jobs processed")
 errors_total = Counter("errors_total", "Total ingestion errors")
@@ -31,8 +37,31 @@ ingestor_queue_depth = Gauge("ingestor_queue_depth", "Queued ingestion jobs")
 tokens_consumed_total = Counter("tokens_consumed_total", "Total tokens consumed by ingestor")
 
 
-async def embed_chunks(chunks):
-    resp = await client.embeddings.create(input=chunks, model=OPENAI_EMBEDDING_MODEL)
+def resolve_embedding_model(conn, db_dim=None):
+    """
+    Force the large embedding model; fail fast if DB dimension is incompatible.
+    """
+    if db_dim is None:
+        db_dim = db.get_embedding_dimension(conn)
+    if db_dim and db_dim != EMBEDDING_DIMENSION:
+        raise RuntimeError(
+            f"forge_embeddings.embedding dimension={db_dim}; expected {EMBEDDING_DIMENSION} for {EMBEDDING_MODEL}. "
+            "Run the 20250106_forge_embeddings_cleanup.sql migration to upgrade the column."
+        )
+    return EMBEDDING_MODEL
+
+
+def resolve_embed_price_per_1k(model: str) -> float:
+    if EMBED_INPUT_PRICE_OVERRIDE:
+        try:
+            return float(EMBED_INPUT_PRICE_OVERRIDE)
+        except ValueError:
+            logger.warning(f"Invalid OPENAI_EMBED_INPUT_COST_PER_1K={EMBED_INPUT_PRICE_OVERRIDE}; falling back to model pricing.")
+    return MODEL_INPUT_PRICE_PER_1K.get(model, MODEL_INPUT_PRICE_PER_1K[EMBEDDING_MODEL])
+
+
+async def embed_chunks(chunks, model: str):
+    resp = await client.embeddings.create(input=chunks, model=model)
     usage = getattr(resp, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", None) or getattr(usage, "total_tokens", None) or 0
     if prompt_tokens == 0:
@@ -59,6 +88,10 @@ async def process_job(conn, job):
     total_chunks = 0
     pages_seen = 0
     discovered_estimate = 0
+    db_embedding_dim = db.get_embedding_dimension(conn)
+    embedding_model = resolve_embedding_model(conn, db_embedding_dim)
+    embed_price_per_1k = resolve_embed_price_per_1k(embedding_model)
+    logger.info(f"Using embedding model={embedding_model} db_dim={db_embedding_dim} price_per_1k={embed_price_per_1k}")
 
     async def handle_page(page, stats):
         nonlocal processed_chunks, total_chunks, pages_seen, discovered_estimate
@@ -69,14 +102,21 @@ async def process_job(conn, job):
             if not chunks:
                 logger.info(f"No chunks generated for {page.get('url')}")
                 return
-            embeddings, prompt_tokens = await embed_chunks(chunks)
-            for chunk_text, embedding in zip(chunks, embeddings):
+            embeddings, prompt_tokens = await embed_chunks(chunks, embedding_model)
+            normalized_url = crawler.normalize_url(page.get('url'))
+            for idx, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                if db_embedding_dim and len(embedding) != db_embedding_dim:
+                    raise ValueError(f"Embedding dimension mismatch: expected {db_embedding_dim}, got {len(embedding)} for {page.get('url')}")
+                content_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
                 db.insert_embedding(
                     conn,
                     org_id,
                     account_id,
                     'crawler',
                     page.get('url'),
+                    normalized_url,
+                    content_hash,
+                    idx,
                     chunk_text,
                     embedding,
                     {"import_job_id": job_id, "title": page.get('title'), "source_url": page.get('url')},
@@ -91,12 +131,12 @@ async def process_job(conn, job):
                 None,
                 'crawler',
                 'IngestionWorker',
-                OPENAI_EMBEDDING_MODEL,
+                embedding_model,
                 'openai',
                 prompt_tokens,
                 0,
                 prompt_tokens,
-                round((prompt_tokens / 1000) * EMBED_INPUT_PRICE_PER_1K, 6),
+                round((prompt_tokens / 1000) * embed_price_per_1k, 6),
                 {"import_job_id": job_id, "page_url": page.get('url')},
             )
             total_chunks += len(chunks)

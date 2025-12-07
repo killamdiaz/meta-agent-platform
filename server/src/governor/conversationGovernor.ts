@@ -99,7 +99,7 @@ async function requestOpenAIEmbedding(text: string): Promise<Vector> {
     throw new Error('OpenAI API key missing. Set OPENAI_API_KEY to enable embedding fallback.');
   }
 
-  const model = process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
+  const model = process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-large';
   const response = await safeFetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: {

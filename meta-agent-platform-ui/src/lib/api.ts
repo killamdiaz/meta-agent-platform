@@ -46,12 +46,40 @@ export const API_BASE = (() => {
   return configured ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 })();
 
+export const EXHAUST_BASE = (() => {
+  const configured = import.meta.env.VITE_EXHAUST_BASE_URL;
+  const normalize = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value);
+
+  if (typeof window !== 'undefined') {
+    if (configured) {
+      try {
+        const url = new URL(configured, window.location.origin);
+        if (url.hostname === 'exhaust' && window.location.hostname !== 'exhaust') {
+          url.hostname = window.location.hostname;
+        }
+        return normalize(url.toString());
+      } catch (error) {
+        console.warn('Invalid VITE_EXHAUST_BASE_URL, using as-is', error);
+        return normalize(configured);
+      }
+    }
+    if (import.meta.env.DEV) {
+      return normalize(
+        `${window.location.protocol}//${window.location.hostname || 'localhost'}:4100`,
+      );
+    }
+    return '';
+  }
+  return configured ?? (import.meta.env.DEV ? 'http://localhost:4100' : '');
+})();
+
 type ApiError = Error & { status?: number };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...rest } = options;
   const mergedHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
+    Accept: 'application/json',
     ...(headers as Record<string, string>),
   };
   const licenseKey = localStorage.getItem('forge_license_key');
@@ -60,6 +88,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   const response = await fetch(`${API_BASE}${path}`, {
     headers: mergedHeaders,
+    credentials: 'include',
     ...rest,
   });
 
@@ -411,6 +440,65 @@ export const api = {
     return request(`/ingestion/jobs/${encodeURIComponent(id)}?org_id=${encodeURIComponent(orgId)}`, {
       method: "DELETE",
     });
+  },
+
+  fetchSamlConfig(orgId: string) {
+    return request<{
+      org_id: string;
+      idp_metadata_url: string | null;
+      idp_entity_id: string | null;
+      idp_sso_url: string | null;
+      idp_certificate: string | null;
+      sp_entity_id: string | null;
+      sp_acs_url: string | null;
+      sp_metadata_url: string | null;
+      enforce_sso: boolean;
+      domains?: string[];
+    }>(`/auth/saml/config/${encodeURIComponent(orgId)}`);
+  },
+
+  saveSamlConfig(
+    orgId: string,
+    payload: Partial<{
+      idp_metadata_url: string;
+      idp_entity_id: string;
+      idp_sso_url: string;
+      idp_certificate: string;
+      sp_entity_id: string;
+      sp_acs_url: string;
+      sp_metadata_url: string;
+      enforce_sso: boolean;
+      domains?: string[];
+    }>,
+  ) {
+    return request(`/auth/saml/config/${encodeURIComponent(orgId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  discoverSaml(email: string) {
+    return request<{
+      enabled: boolean;
+      orgId?: string;
+      enforceSso?: boolean;
+      idpEntityId?: string;
+      idpSsoUrl?: string;
+      spEntityId?: string;
+      acsUrl?: string;
+      metadataUrl?: string;
+    }>(`/auth/saml/discover?email=${encodeURIComponent(email)}`);
+  },
+
+  startSamlLogin(payload: { email?: string; org_id?: string; redirect?: string; relayState?: string }) {
+    return request<{ redirectUrl: string; orgId: string }>('/auth/saml/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  fetchSamlSession() {
+    return request<{ user: any; token: string }>('/auth/saml/session');
   },
 };
 

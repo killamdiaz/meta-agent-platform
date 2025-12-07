@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileText, Shield, ArrowRight, KeyRound, Loader2 } from 'lucide-react';
+import { Shield, ArrowRight, KeyRound, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabaseClient';
+import { api } from '@/lib/api';
 
 const ATLAS_LOGIN_URL = import.meta.env.VITE_ATLAS_LOGIN_URL || 'https://atlasos.app/login';
-const SAML_PROVIDER_ID = import.meta.env.VITE_SUPABASE_SAML_PROVIDER_ID || '';
-const SAML_DOMAIN = import.meta.env.VITE_SUPABASE_SSO_DOMAIN || '';
-const SAML_AVAILABLE = Boolean(SAML_PROVIDER_ID || SAML_DOMAIN);
 
 const safeDecode = (value: string | null) => {
   if (!value) {
@@ -51,9 +49,19 @@ export default function AtlasForgeLogin() {
   const [activeAction, setActiveAction] = useState<'atlas' | 'saml' | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [ssoInfo, setSsoInfo] = useState<{
+    enabled: boolean;
+    orgId?: string;
+    enforceSso?: boolean;
+    metadataUrl?: string;
+  } | null>(null);
+  const [ssoChecking, setSsoChecking] = useState(false);
 
   const redirectParam = searchParams.get('redirect');
   const destination = useMemo(() => normalizeRedirect(safeDecode(redirectParam)), [redirectParam]);
+  const samlEnabled = ssoInfo?.enabled ?? false;
+  const enforceSso = Boolean(ssoInfo?.enforceSso);
 
   useEffect(() => {
     if (authLoading || !user) {
@@ -61,6 +69,28 @@ export default function AtlasForgeLogin() {
     }
     navigate(destination, { replace: true });
   }, [authLoading, user, destination, navigate]);
+
+  useEffect(() => {
+    if (!email || !email.includes('@')) {
+      setSsoInfo(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      setSsoChecking(true);
+      api
+        .discoverSaml(email)
+        .then((result) => {
+          setSsoInfo(result);
+        })
+        .catch((err) => {
+          console.warn('[login] sso discovery failed', err);
+          setSsoInfo(null);
+        })
+        .finally(() => setSsoChecking(false));
+    }, 350);
+
+    return () => clearTimeout(handle);
+  }, [email]);
 
   const buildCallbackUrl = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -74,6 +104,10 @@ export default function AtlasForgeLogin() {
   }, [destination]);
 
   const handleAtlasLogin = useCallback(() => {
+    if (ssoInfo?.enforceSso) {
+      setErrorMessage('Your organization enforces SSO. Please use Login with SSO.');
+      return;
+    }
     if (typeof window === 'undefined') {
       return;
     }
@@ -82,44 +116,30 @@ export default function AtlasForgeLogin() {
     setStatusMessage('Taking you to Atlas…');
     const callback = encodeURIComponent(buildCallbackUrl());
     window.location.href = `${ATLAS_LOGIN_URL}?source=forge&redirect=${callback}`;
-  }, [buildCallbackUrl]);
+  }, [buildCallbackUrl, ssoInfo?.enforceSso]);
 
   const handleSamlLogin = useCallback(async () => {
-    if (!SAML_AVAILABLE) {
+    if (!email || !email.includes('@')) {
+      setErrorMessage('Enter your work email to continue with SSO.');
       return;
     }
     setActiveAction('saml');
     setErrorMessage(null);
-    setStatusMessage('Preparing secure SAML/Okta session…');
+    setStatusMessage('Redirecting to your identity provider…');
     try {
-      const redirectTo = buildCallbackUrl();
-      let response;
-      if (SAML_PROVIDER_ID) {
-        response = await supabase.auth.signInWithSSO({
-          providerId: SAML_PROVIDER_ID,
-          options: { redirectTo },
-        });
-      } else {
-        response = await supabase.auth.signInWithSSO({
-          domain: SAML_DOMAIN,
-          options: { redirectTo },
-        });
+      const response = await api.startSamlLogin({ email, redirect: destination });
+      if (!response?.redirectUrl) {
+        throw new Error('Unable to start SAML login. Please try again.');
       }
-      if (response.error) {
-        throw response.error;
-      }
-      if (!response.data?.url) {
-        throw new Error('Unable to start SAML/Okta login. Please try again.');
-      }
-      window.location.href = response.data.url;
+      window.location.href = response.redirectUrl;
     } catch (error) {
-      console.error('[login] SAML/Okta failed', error);
+      console.error('[login] SAML failed', error);
       setActiveAction(null);
       setStatusMessage(null);
-      const message = error instanceof Error ? error.message : 'SAML/Okta login failed.';
+      const message = error instanceof Error ? error.message : 'SAML login failed.';
       setErrorMessage(message);
     }
-  }, [buildCallbackUrl]);
+  }, [destination, email]);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -159,42 +179,64 @@ export default function AtlasForgeLogin() {
             <p className="text-sm text-muted-foreground">Select your authentication provider.</p>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="rounded-2xl border border-border/80 bg-card/70 p-4 space-y-3">
-              <div>
-                <p className="font-semibold">Login with Atlas</p>
-                <p className="text-sm text-muted-foreground">Use your Atlas credentials to continue.</p>
+            {!enforceSso ? (
+              <div className="rounded-2xl border border-border/80 bg-card/70 p-4 space-y-3">
+                <div>
+                  <p className="font-semibold">Login with Atlas</p>
+                  <p className="text-sm text-muted-foreground">Use your Atlas credentials to continue.</p>
+                </div>
+                <Button className="w-full h-12" onClick={handleAtlasLogin} disabled={activeAction !== null}>
+                  {activeAction === 'atlas' ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Redirecting…
+                    </>
+                  ) : (
+                    <>
+                      Sign In with Atlas
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
+                </Button>
               </div>
-              <Button className="w-full h-12" onClick={handleAtlasLogin} disabled={activeAction !== null}>
-                {activeAction === 'atlas' ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Redirecting…
-                  </>
-                ) : (
-                  <>
-                    Sign In with Atlas
-                    <ArrowRight className="h-4 w-4" />
-                  </>
-                )}
-              </Button>
-            </div>
+            ) : (
+              <Alert>
+                <AlertDescription>Your organization enforces SSO. Use the secure login below.</AlertDescription>
+              </Alert>
+            )}
 
             <Separator />
 
             <div
               className={`rounded-2xl border border-border/80 p-4 space-y-3 ${
-                SAML_AVAILABLE ? 'bg-card/70' : 'bg-muted/30'
+                samlEnabled ? 'bg-card/70' : 'bg-muted/30'
               }`}
             >
-              <div>
-                <p className="font-semibold">Login with SAML/Okta</p>
-                <p className="text-sm text-muted-foreground">Enterprise SSO powered by your IdP.</p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold">Login with SSO</p>
+                  <p className="text-sm text-muted-foreground">
+                    Enterprise SAML 2.0 using your IdP (Okta, Azure AD, Ping).
+                  </p>
+                </div>
+                <Badge variant={samlEnabled ? 'default' : 'outline'}>
+                  {ssoChecking ? 'Checking…' : samlEnabled ? 'Ready' : 'Domain check'}
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">Work email</label>
+                <Input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  disabled={activeAction !== null}
+                />
               </div>
               <Button
                 variant="outline"
                 className="w-full h-12"
                 onClick={handleSamlLogin}
-                disabled={activeAction !== null || !SAML_AVAILABLE}
+                disabled={activeAction !== null || !samlEnabled || ssoChecking || !email}
               >
                 {activeAction === 'saml' ? (
                   <>
@@ -203,15 +245,15 @@ export default function AtlasForgeLogin() {
                   </>
                 ) : (
                   <>
-                    Start SSO
+                    Login with SSO
                     <KeyRound className="h-4 w-4" />
                   </>
                 )}
               </Button>
-              {!SAML_AVAILABLE && (
+              {email && !ssoChecking && !samlEnabled && (
                 <Alert className="text-sm">
                   <AlertDescription>
-                    Configure `VITE_SUPABASE_SAML_PROVIDER_ID` or `VITE_SUPABASE_SSO_DOMAIN` in `.env` to enable SAML/Okta.
+                    We couldn't find an SSO configuration for <strong>{email.split('@')[1]}</strong>. Contact your admin.
                   </AlertDescription>
                 </Alert>
               )}

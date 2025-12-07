@@ -54,7 +54,7 @@ async function computeUsage(customerId: string): Promise<{ seats: number; tokens
   return { seats, tokens };
 }
 
-export async function validateLicenseKey(licenseKey: string): Promise<LicenseStatus> {
+export async function validateLicenseKey(licenseKey: string, usageOrgId?: string): Promise<LicenseStatus> {
   const license = await fetchLicense(licenseKey);
   if (!license) {
     return { license: null as any, seats_used: 0, tokens_used: 0, valid: false, reason: 'License not found' };
@@ -73,7 +73,8 @@ export async function validateLicenseKey(licenseKey: string): Promise<LicenseSta
     return { license, seats_used: 0, tokens_used: 0, valid: false, reason: 'Expired license' };
   }
 
-  const { seats, tokens } = await computeUsage(license.customer_id);
+  const usageId = usageOrgId || license.customer_id;
+  const { seats, tokens } = await computeUsage(usageId);
   if (seats > license.max_seats) {
     return { license, seats_used: seats, tokens_used: tokens, valid: false, reason: 'Seat limit exceeded' };
   }
@@ -129,7 +130,8 @@ export async function validateLicense(req: Request, res: Response, next: NextFun
   }
 
   try {
-    const status = await validateLicenseKey(licenseKey);
+    const usageOrgId = (req.headers['x-org-id'] as string) || (req.query.org_id as string) || config.defaultOrgId;
+    const status = await validateLicenseKey(licenseKey, usageOrgId);
     (req as any).licenseStatus = status;
     if (!status.valid) {
       return res.status(403).json({ error: 'License invalid. Contact your admin.', reason: status.reason });

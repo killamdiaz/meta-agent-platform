@@ -15,25 +15,33 @@ export async function handleSlackActivate(req: Request, res: Response) {
     const stateRaw = typeof req.query.state === 'string' ? req.query.state : null;
     let stateOrg: string | null = null;
     let stateAccount: string | null = null;
+    let stateLicense: string | null = null;
     if (stateRaw) {
       try {
         const parsed = JSON.parse(decodeURIComponent(stateRaw));
         stateOrg = typeof parsed.org_id === 'string' ? parsed.org_id : null;
         stateAccount = typeof parsed.account_id === 'string' ? parsed.account_id : null;
+        stateLicense = typeof parsed.license_key === 'string' ? parsed.license_key : null;
       } catch {
         stateOrg = null;
       }
     }
 
+    const queryLicense = typeof req.query.license_key === 'string' ? req.query.license_key : null;
     const orgId = stateOrg ?? resolveOrgId(req);
     const accountId = stateAccount ?? resolveAccountId(req);
+    const licenseKey = queryLicense ?? stateLicense;
     if (!orgId) {
       res.status(400).json({ message: 'org_id is required to activate Slack connector' });
       return;
     }
 
-    const redirectUri =
+    const baseRedirect =
       config.slackRedirectUrl || `${req.protocol}://${req.get('host')}/connectors/slack/api/activate`;
+    const redirectUri =
+      licenseKey === null
+        ? baseRedirect
+        : `${baseRedirect}${baseRedirect.includes('?') ? '&' : '?'}license_key=${encodeURIComponent(licenseKey)}`;
     const payload = new URLSearchParams({
       code,
       client_id: config.slackClientId,

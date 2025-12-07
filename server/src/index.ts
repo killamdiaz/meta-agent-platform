@@ -29,6 +29,7 @@ import { errorCounter, metricsHandler, requestCounter } from './metrics.js';
 import { validateLicense } from './middleware/license.js';
 import licenseRoute from './routes/license.js';
 import deploymentRoute from './routes/deployment.js';
+import samlRoute from './routes/saml.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,7 @@ async function bootstrap() {
     }),
   );
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
   app.use((req, _res, next) => {
     requestCounter.inc({ route: req.path, method: req.method });
@@ -58,6 +60,7 @@ async function bootstrap() {
 
   app.use('/api/license', licenseRoute);
   app.use('/api/deployment', deploymentRoute);
+  app.use(samlRoute);
   app.use(validateLicense);
 
   app.use('/agents', agentsRoute);
@@ -93,6 +96,7 @@ async function bootstrap() {
       '/meta-controller',
       '/automations',
       '/connectors',
+      '/exhaust',
       '/ingestion',
       '/usage',
       '/healthz'
