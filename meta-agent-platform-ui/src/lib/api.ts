@@ -79,6 +79,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...rest } = options;
   const mergedHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
+    Accept: 'application/json',
     ...(headers as Record<string, string>),
   };
   const licenseKey = localStorage.getItem('forge_license_key');
@@ -87,6 +88,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   const response = await fetch(`${API_BASE}${path}`, {
     headers: mergedHeaders,
+    credentials: 'include',
     ...rest,
   });
 
@@ -438,6 +440,65 @@ export const api = {
     return request(`/ingestion/jobs/${encodeURIComponent(id)}?org_id=${encodeURIComponent(orgId)}`, {
       method: "DELETE",
     });
+  },
+
+  fetchSamlConfig(orgId: string) {
+    return request<{
+      org_id: string;
+      idp_metadata_url: string | null;
+      idp_entity_id: string | null;
+      idp_sso_url: string | null;
+      idp_certificate: string | null;
+      sp_entity_id: string | null;
+      sp_acs_url: string | null;
+      sp_metadata_url: string | null;
+      enforce_sso: boolean;
+      domains?: string[];
+    }>(`/auth/saml/config/${encodeURIComponent(orgId)}`);
+  },
+
+  saveSamlConfig(
+    orgId: string,
+    payload: Partial<{
+      idp_metadata_url: string;
+      idp_entity_id: string;
+      idp_sso_url: string;
+      idp_certificate: string;
+      sp_entity_id: string;
+      sp_acs_url: string;
+      sp_metadata_url: string;
+      enforce_sso: boolean;
+      domains?: string[];
+    }>,
+  ) {
+    return request(`/auth/saml/config/${encodeURIComponent(orgId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  discoverSaml(email: string) {
+    return request<{
+      enabled: boolean;
+      orgId?: string;
+      enforceSso?: boolean;
+      idpEntityId?: string;
+      idpSsoUrl?: string;
+      spEntityId?: string;
+      acsUrl?: string;
+      metadataUrl?: string;
+    }>(`/auth/saml/discover?email=${encodeURIComponent(email)}`);
+  },
+
+  startSamlLogin(payload: { email?: string; org_id?: string; redirect?: string; relayState?: string }) {
+    return request<{ redirectUrl: string; orgId: string }>('/auth/saml/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  fetchSamlSession() {
+    return request<{ user: any; token: string }>('/auth/saml/session');
   },
 };
 

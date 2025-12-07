@@ -35,5 +35,14 @@ export const config = {
   crawlAdditionalPaths: process.env.CRAWL_ADDITIONAL_PATHS || '',
   crawlMaxPages: Number(process.env.CRAWL_MAX_PAGES || 50),
   licenseSecret: process.env.LICENSE_SECRET || 'dev-license-secret',
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000').split(',')
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000').split(','),
+  appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
+  samlSpEntityId: process.env.SAML_SP_ENTITY_ID || 'atlas-forge-sp',
+  samlSpAcsBaseUrl: process.env.SAML_SP_ACS_BASE_URL || '',
+  samlSpMetadataBaseUrl: process.env.SAML_SP_METADATA_BASE_URL || '',
+  samlSpPrivateKey: process.env.SAML_SP_PRIVATE_KEY || '',
+  samlSpCertificate: process.env.SAML_SP_CERTIFICATE || process.env.SAML_SP_CERT || '',
+  samlJwtSecret: process.env.SAML_JWT_SECRET || 'dev-saml-jwt',
+  samlJwtExpiryHours: Number(process.env.SAML_JWT_EXPIRY_HOURS || 12),
+  samlDefaultRedirect: process.env.SAML_DEFAULT_REDIRECT || ''
 };
