@@ -14,6 +14,7 @@ type TicketDrawerProps = {
   loading?: boolean;
   issueDetails?: Record<string, JiraIssueDetails | undefined>;
   similarIssues?: Record<string, SimilarIssue[] | undefined>;
+  similarLoading?: Record<string, boolean | undefined>;
   view?: "pending" | "resolved";
   onChangeView?: (view: "pending" | "resolved") => void;
 };
@@ -27,6 +28,7 @@ export default function TicketDrawer({
   loading,
   issueDetails,
   similarIssues,
+  similarLoading,
   view = "pending",
   onChangeView,
 }: TicketDrawerProps) {
@@ -43,6 +45,7 @@ export default function TicketDrawer({
               onBack={onClearSelection}
               details={issueDetails?.[selectedTicket.key]}
               similarIssues={similarIssues?.[selectedTicket.key]}
+              similarLoading={similarLoading?.[selectedTicket.key]}
             />
           </div>
           <div className="pt-4">

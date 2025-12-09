@@ -9,6 +9,7 @@ import { ingestJiraIssue, recordIntegrationNode } from '../../integrationNodes.j
 import { pool } from '../../../db.js';
 import { Blob } from 'buffer';
 import { normalizeJiraIssue } from '../normalize.js';
+import { embedContent } from '../../../core/ingestion/index.js';
 
 const router = express.Router();
 
@@ -299,24 +300,61 @@ router.post('/issues/similar', async (req, res) => {
       return res.status(400).json({ message: 'summary or description required' });
     }
     const text = [summary, description].filter(Boolean).join('\n');
-    const { rows } = await pool.query(
-      `
-        SELECT ticket_id as key,
-               title as summary,
-               resolution as "rootCause",
-               metadata->>'howSolved' as "howSolved",
-               metadata->>'solvedBy' as "solvedBy",
-               metadata->>'resolutionComment' as "resolutionComment",
-               metadata->>'timeTaken' as "timeTaken",
-               0 as "similarityScore"
-        FROM jira_embeddings
-        WHERE org_id = $1
-          AND ($2::text IS NULL OR metadata->>'projectKey' = $2)
-        ORDER BY updated_at DESC
-        LIMIT $3
-      `,
-      [orgId, projectKey ?? null, limit],
-    );
+    let rows: any[] = [];
+    try {
+      const embedding = await embedContent(text);
+      if (embedding?.length) {
+        const vectorLiteral = `[${embedding.join(',')}]`;
+        const result = await pool.query(
+          `
+            SELECT ticket_id as key,
+                   title as summary,
+                   resolution as "rootCause",
+                   metadata->>'howSolved' as "howSolved",
+                   metadata->>'solvedBy' as "solvedBy",
+                   metadata->>'resolutionComment' as "resolutionComment",
+                   metadata->>'timeTaken' as "timeTaken",
+                   updated_at,
+                   (1 - (embedding <=> $3::vector)) as "similarityScore"
+              FROM jira_embeddings
+             WHERE org_id = $1
+               AND resolution IS NOT NULL
+               AND ($2::text IS NULL OR metadata->>'projectKey' = $2)
+             ORDER BY embedding <=> $3::vector
+             LIMIT $4
+          `,
+          [orgId, projectKey ?? null, vectorLiteral, limit],
+        );
+        rows = result.rows;
+      }
+    } catch (err) {
+      console.warn('[jira similar] vector search failed, falling back to recency', err);
+    }
+
+    if (!rows.length) {
+      const fallback = await pool.query(
+        `
+          SELECT ticket_id as key,
+                 title as summary,
+                 resolution as "rootCause",
+                 metadata->>'howSolved' as "howSolved",
+                 metadata->>'solvedBy' as "solvedBy",
+                 metadata->>'resolutionComment' as "resolutionComment",
+                 metadata->>'timeTaken' as "timeTaken",
+                 updated_at,
+                 0 as "similarityScore"
+            FROM jira_embeddings
+           WHERE org_id = $1
+             AND resolution IS NOT NULL
+             AND ($2::text IS NULL OR metadata->>'projectKey' = $2)
+           ORDER BY updated_at DESC
+           LIMIT $3
+        `,
+        [orgId, projectKey ?? null, limit],
+      );
+      rows = fallback.rows;
+    }
+
     res.json({ items: rows });
   } catch (error: any) {
     res.status(500).json({ message: error?.message ?? 'Failed to search similar issues' });

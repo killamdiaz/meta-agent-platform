@@ -90,6 +90,20 @@ export function AppSidebar() {
     }
   }, [usageSummary, setTokenUsage]);
 
+  useEffect(() => {
+    if (tokensLastUpdated || !orgId) return;
+    void api
+      .fetchUsageSummary(orgId)
+      .then((data) => {
+        if (data?.total_tokens !== undefined) {
+          setTokenUsage({ total: Number(data.total_tokens) || 0, byAgent: {} });
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      });
+  }, [orgId, setTokenUsage, tokensLastUpdated]);
+
   const usage = useMemo(() => {
     if (!overview) {
       return {

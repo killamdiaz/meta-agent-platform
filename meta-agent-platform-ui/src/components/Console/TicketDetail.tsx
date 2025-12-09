@@ -13,6 +13,7 @@ type TicketDetailProps = {
     attachments?: Array<{ filename?: string; url?: string; size?: number }>;
     url?: string;
   };
+  similarLoading?: boolean;
   similarIssues?: Array<{
     key: string;
     summary?: string;
@@ -22,14 +23,31 @@ type TicketDetailProps = {
     resolutionComment?: string;
     timeTaken?: string;
     similarityScore?: number;
+    updatedAt?: string;
   }>;
 };
 
-export default function TicketDetail({ ticket, onBack, details, similarIssues }: TicketDetailProps) {
+export default function TicketDetail({ ticket, onBack, details, similarIssues, similarLoading }: TicketDetailProps) {
   const [activeTab, setActiveTab] = useState<"All" | "Comments" | "History" | "Work log" | "Approvals">("Comments");
   const [showDetails, setShowDetails] = useState(true);
   const tabs = ["All", "Comments", "History", "Work log", "Approvals"] as const;
   const comments = details?.comments ?? ticket.comments ?? [];
+  const bestSimilar = similarIssues?.[0];
+
+  const formatRelativeTime = (value?: string) => {
+    if (!value) return "recently";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "recently";
+    const diffMs = Date.now() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays <= 0) return "today";
+    if (diffDays === 1) return "yesterday";
+    if (diffDays < 30) return `${diffDays} days ago`;
+    const months = Math.floor(diffDays / 30);
+    if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
+    const years = Math.floor(months / 12);
+    return `${years} year${years === 1 ? "" : "s"} ago`;
+  };
 
   return (
     <div className="flex flex-col h-full break-words">
@@ -124,11 +142,45 @@ export default function TicketDetail({ ticket, onBack, details, similarIssues }:
         )}
       </div>
 
-      <div className="bg-card/50 border border-border/50 rounded-lg p-4 mb-6">
-        <button className="w-full flex items-center justify-between text-sm">
+      <div className="bg-card/50 border border-border/50 rounded-lg p-4 mb-6 space-y-3">
+        <div className="flex items-center justify-between">
           <span className="font-medium text-foreground">Similar requests</span>
           <ChevronDown className="w-4 h-4 text-muted-foreground" />
-        </button>
+        </div>
+        {similarLoading ? (
+          <p className="text-xs text-muted-foreground">Loading similar requests…</p>
+        ) : bestSimilar ? (
+          <div className="rounded-lg border border-atlas-glow/40 bg-atlas-glow/10 p-3 shadow-md">
+            <p className="text-sm font-semibold text-foreground">
+              Ticket {bestSimilar.key} looks similar — solved {formatRelativeTime(bestSimilar.updatedAt)}.
+            </p>
+            {bestSimilar.solvedBy && (
+              <p className="text-xs text-muted-foreground mt-1">Resolved by {bestSimilar.solvedBy}</p>
+            )}
+            {bestSimilar.summary && <p className="text-sm text-foreground mt-2">{bestSimilar.summary}</p>}
+            {bestSimilar.howSolved && (
+              <p className="text-xs text-muted-foreground mt-2">
+                <span className="font-medium text-foreground">How it was solved:</span> {bestSimilar.howSolved}
+              </p>
+            )}
+            {bestSimilar.rootCause && (
+              <p className="text-xs text-muted-foreground mt-1">
+                <span className="font-medium text-foreground">Root cause:</span> {bestSimilar.rootCause}
+              </p>
+            )}
+            {bestSimilar.resolutionComment && (
+              <p className="text-xs text-muted-foreground mt-1">
+                <span className="font-medium text-foreground">Resolution notes:</span> {bestSimilar.resolutionComment}
+              </p>
+            )}
+            <div className="mt-2 flex items-center gap-3 text-xs text-atlas-glow">
+              <span className="font-medium">Link to ticket:</span>
+              <span className="text-foreground/80">{bestSimilar.key}</span>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No similar solved tickets found yet.</p>
+        )}
       </div>
 
       <div className="flex-1 min-h-0">
@@ -191,20 +243,23 @@ export default function TicketDetail({ ticket, onBack, details, similarIssues }:
             <h4 className="text-sm font-semibold text-foreground mb-2">Similar solved tickets</h4>
             <div className="space-y-3">
               {similarIssues.map((issue, idx) => (
-                <div key={issue.key || idx} className="border border-border/50 rounded-lg p-3 bg-card/40">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-foreground">{issue.key}</span>
-                    {issue.similarityScore !== undefined && (
-                      <span className="text-xs text-muted-foreground">
-                        {(issue.similarityScore * 100).toFixed(0)}% match
-                      </span>
-                    )}
-                  </div>
-                  {issue.summary && <p className="text-sm text-foreground mt-1">{issue.summary}</p>}
-                  {issue.howSolved && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      <span className="font-medium">How solved:</span> {issue.howSolved}
-                    </p>
+              <div key={issue.key || idx} className="border border-border/50 rounded-lg p-3 bg-card/40">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-foreground">{issue.key}</span>
+                  {issue.similarityScore !== undefined && (
+                    <span className="text-xs text-muted-foreground">
+                      {(issue.similarityScore * 100).toFixed(0)}% match
+                    </span>
+                  )}
+                </div>
+                {issue.updatedAt && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">Updated {formatRelativeTime(issue.updatedAt)}</p>
+                )}
+                {issue.summary && <p className="text-sm text-foreground mt-1">{issue.summary}</p>}
+                {issue.howSolved && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    <span className="font-medium">How solved:</span> {issue.howSolved}
+                  </p>
                   )}
                   {issue.rootCause && (
                     <p className="text-xs text-muted-foreground mt-1">

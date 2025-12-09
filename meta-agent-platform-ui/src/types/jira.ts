@@ -7,4 +7,5 @@ export type SimilarIssue = {
   resolutionComment?: string;
   timeTaken?: string;
   similarityScore?: number;
+  updatedAt?: string;
 };

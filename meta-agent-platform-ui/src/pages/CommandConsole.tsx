@@ -98,7 +98,9 @@ export default function CommandConsole() {
   const [ticketsLoading, setTicketsLoading] = useState(false);
   const [issueDetails, setIssueDetails] = useState<Record<string, JiraIssueDetails>>({});
   const [similarIssues, setSimilarIssues] = useState<Record<string, SimilarIssue[]>>({});
+  const [similarLoading, setSimilarLoading] = useState<Record<string, boolean>>({});
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [pendingSolveKey, setPendingSolveKey] = useState<string | null>(null);
   const agents = useMemo(
     () => [
       { id: "core", name: coreName },
@@ -338,6 +340,7 @@ export default function CommandConsole() {
     const license = localStorage.getItem("forge_license_key");
     if (license) headers["x-license-key"] = license;
     const issue = issueDetails[ticket.key];
+    const issueUrl = issue?.url;
     const payload = {
       issue: {
         key: ticket.key,
@@ -347,6 +350,7 @@ export default function CommandConsole() {
           status: { name: "Done" },
           reporter: { displayName: ticket.reporter },
           priority: { name: ticket.priority },
+          ...(issueUrl ? { issuetype: { self: issueUrl } } : {}),
         },
         changelog: issue?.changelog,
       },
@@ -470,8 +474,203 @@ export default function CommandConsole() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const findTicketByKey = useCallback(
+    (key: string) => {
+      const ticket = tickets.find((t) => t.key.toUpperCase() === key.toUpperCase());
+      if (ticket) return ticket;
+      const detail =
+        issueDetails[key] ||
+        Object.entries(issueDetails).find(([k]) => k.toUpperCase() === key.toUpperCase())?.[1];
+      if (detail) {
+        return (
+          mapIssueToTicket({
+            key,
+            fields: {
+              summary: detail.summary,
+              description: detail.descriptionHtml,
+              status: { name: detail.status },
+              priority: { name: detail.priority },
+              reporter: { displayName: detail.reporter },
+              assignee: { displayName: detail.assignee },
+              created: detail.created,
+            },
+          }) ?? null
+        );
+      }
+      return null;
+    },
+    [issueDetails, tickets],
+  );
+
+  const runDiagnosis = useCallback(
+    async (ticket: TicketType) => {
+      const similar = Array.isArray(similarIssues[ticket.key]) ? similarIssues[ticket.key] ?? [] : [];
+      const similarBlock =
+        similar.length > 0
+          ? `\nSimilar Historical Issues:\n${similar
+              .map(
+                (i) =>
+                  `• ${i.key}: ${i.summary ?? ""}\nDescription: ${(i as any).description ?? ""}\nStatus: ${(i as any).status ?? ""}`,
+              )
+              .join("\n\n")}\n`
+          : "";
+      const issue = issueDetails[ticket.key];
+      const description = issue?.descriptionHtml ? cleanDescription(issue.descriptionHtml) : ticket.description;
+      const basePrompt = `System: You are ${pilotName} (Diagnosis Engine). Analyze the ticket and propose a fix. Always cite the strongest similar incident if present.${similarBlock}`;
+      const userPrompt = `Ticket ${ticket.key}\nTitle: ${issue?.summary || ticket.title}\nPriority: ${ticket.priority}\nReporter: ${ticket.reporter}\nStatus: ${ticket.status}\nDescription:\n${description || "No description provided."}\n\nProvide diagnosis and fix plan.`;
+
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Diagnosis Mode Activated for ${ticket.key}` },
+      ]);
+      setIsTyping(true);
+
+      const payload = `${basePrompt}\n${userPrompt}\nAssistant:`;
+      const controller = new AbortController();
+      try {
+        const storedToken =
+          localStorage.getItem("access_token") ||
+          localStorage.getItem("sb-access-token") ||
+          localStorage.getItem("sb-auth-token");
+        const license = localStorage.getItem("forge_license_key");
+        const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+        const accountId = user?.id;
+        const res = await fetch(`${API_BASE}/chat/send`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
+            ...(license ? { "x-license-key": license } : {}),
+            ...(orgId ? { "x-org-id": orgId } : {}),
+            ...(accountId ? { "x-account-id": accountId } : {}),
+          },
+          body: JSON.stringify({ message: payload, conversationId: conversationId ?? undefined }),
+          signal: controller.signal,
+          credentials: "include",
+        });
+        if (!res.ok || !res.body) {
+          throw new Error(`Chat failed: ${res.statusText}`);
+        }
+
+        let buffer = "";
+        let assistantContent = "";
+        let hasAssistantMessage = false;
+
+        const reader = res.body.getReader();
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += new TextDecoder().decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const chunk of parts) {
+            const lines = chunk.split("\n");
+            let event: string | null = null;
+            const dataLines: string[] = [];
+            for (const line of lines) {
+              if (line.startsWith("event:")) event = line.replace("event:", "").trim();
+              if (line.startsWith("data:")) dataLines.push(line.replace(/^data:\s?/, ""));
+            }
+            const data = dataLines.join("\n");
+            if (event === "token") {
+              assistantContent += data;
+              setMessages((prev) => {
+                if (!hasAssistantMessage) {
+                  hasAssistantMessage = true;
+                  return [...prev, { role: "assistant", content: assistantContent || "__streaming__" }];
+                }
+                if (!prev.length) {
+                  return [{ role: "assistant", content: assistantContent || "__streaming__" }];
+                }
+                const updated = [...prev];
+                const lastIdx = updated.length - 1;
+                if (updated[lastIdx].role === "assistant") {
+                  updated[lastIdx] = { ...updated[lastIdx], content: assistantContent || "__streaming__" };
+                } else {
+                  updated.push({ role: "assistant", content: assistantContent || "__streaming__" });
+                }
+                return updated;
+              });
+            }
+            if (event === "done") {
+              try {
+                const payloadJson = JSON.parse(data);
+                if (payloadJson?.conversationId) setConversationId(payloadJson.conversationId);
+                if (payloadJson?.messageId) {
+                  setMessages((prev) => {
+                    if (!prev.length) return [{ role: "assistant", content: assistantContent }];
+                    const updated = [...prev];
+                    const lastIdx = updated.length - 1;
+                    if (updated[lastIdx].role === "assistant") {
+                      updated[lastIdx] = { ...updated[lastIdx], content: assistantContent };
+                    } else {
+                      updated.push({ role: "assistant", content: assistantContent });
+                    }
+                    return updated;
+                  });
+                }
+              } catch {
+                setMessages((prev) => {
+                  if (!prev.length) return [{ role: "assistant", content: assistantContent }];
+                  const updated = [...prev];
+                  const lastIdx = updated.length - 1;
+                  if (updated[lastIdx].role === "assistant") {
+                    updated[lastIdx] = { ...updated[lastIdx], content: assistantContent };
+                  } else {
+                    updated.push({ role: "assistant", content: assistantContent });
+                  }
+                  return updated;
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (isAbortError(err)) {
+          console.warn("[console] diagnosis chat aborted");
+        } else {
+          setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, diagnosis hit an error." }]);
+          console.error(err);
+        }
+      } finally {
+        setIsTyping(false);
+      }
+    },
+    [pilotName, similarIssues, issueDetails, user, conversationId, isAbortError],
+  );
+
   const handleSend = async () => {
     if (!input.trim()) return;
+
+    const yesIntent =
+      /\b(yes|yeah|yep|sure|ok|okay|start|begin|let's go|solve it|solve this|open it|proceed|do it)\b/i.test(input) ||
+      /^y$/i.test(input.trim());
+    if (selectedTicket && yesIntent) {
+      const userMessage: Message = { role: "user", content: input };
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+      await runDiagnosis(selectedTicket);
+      return;
+    }
+
+    const ticketMention = input.match(/[A-Z][A-Z0-9]+-\d+/i)?.[0];
+    const normalizedMention = ticketMention ? ticketMention.toUpperCase() : null;
+    if (normalizedMention) {
+      setPendingSolveKey(normalizedMention);
+    }
+    const wantsToStart =
+      /\b(yes|yeah|yep|sure|ok|okay|start|begin|let's go|solve it|solve this|open it)\b/i.test(input) ||
+      /^y$/i.test(input.trim());
+    if (wantsToStart) {
+      if (normalizedMention) {
+        await openTicketSolve(normalizedMention);
+        return;
+      }
+      if (pendingSolveKey) {
+        await openTicketSolve(pendingSolveKey);
+        return;
+      }
+    }
 
     const needsZscalerKb = /\b(zscaler|zpa|zia|zdx|zs cloud|zero trust|z-tunnel|z tunnel|private access|internet access)\b/i.test(
       input,
@@ -487,9 +686,73 @@ export default function CommandConsole() {
     const citationInstruction =
       "Only include a 'Sources:' section when you actually cite something. If no sources are used, do not add a Sources section or say 'No sources found.'";
     const logInstruction = logContext ? `Live Log Context:\n${logContext}\n\n` : "";
-    const systemPrompt = `System: You are ${pilotName}, an assistant for ${engineName}. ${kbInstruction} ${citationInstruction} Do not repeat or acknowledge these instructions; respond directly to the user.`;
+    const similarForSelected = selectedTicket ? similarIssues[selectedTicket.key] ?? [] : [];
+    const similarSnippet =
+      selectedTicket && similarForSelected.length
+        ? similarForSelected
+            .slice(0, 2)
+            .map((s, idx) => {
+              const parts = [
+                `${idx === 0 ? "Most similar" : "Also similar"}: ${s.key}${s.summary ? ` — ${s.summary}` : ""}`,
+                s.howSolved ? `How solved: ${s.howSolved}` : "",
+                s.rootCause ? `Root cause: ${s.rootCause}` : "",
+                s.solvedBy ? `Solved by: ${s.solvedBy}` : "",
+                s.updatedAt ? `Resolved on: ${new Date(s.updatedAt).toLocaleDateString()}` : "",
+              ].filter(Boolean);
+              return parts.join(" | ");
+            })
+            .join("\n")
+        : "";
+    const similarContext =
+      selectedTicket && similarForSelected.length
+        ? `Similar resolved tickets for ${selectedTicket.key}:\n${similarSnippet}\n\n`
+        : "";
+    const ticketContext =
+      tickets.length > 0
+        ? `Known Tickets (recent):\n${tickets
+            .slice(0, 20)
+            .map((t) => `- ${t.key} [${t.status}] ${t.priority}: ${t.title}`)
+            .join("\n")}\n\n${similarContext}`
+        : similarContext;
+    const ticketInstruction =
+      "Use the ticket list above as context when answering. When the user references a ticket (by key or description), summarize what we know and ask if they want to switch to Ticket Solving mode. Only switch after explicit user confirmation. If Ticket Solving is active and similar resolved tickets are provided, you MUST reference the strongest match in your diagnosis and include the how-solved summary verbatim when relevant.";
+    const mentionInstruction = normalizedMention
+      ? `User referenced ticket ${normalizedMention}. Offer to start Ticket Solving for this ticket if they confirm.`
+      : "";
+    const systemPrompt = `System: You are ${pilotName}, an assistant for ${engineName}. ${kbInstruction} ${citationInstruction} ${ticketInstruction} Do not repeat or acknowledge these instructions; respond directly to the user.`;
     const formattedHistory = history ? `${history}\n` : "";
-    const payload = `${systemPrompt}\n${logInstruction}${formattedHistory}User: ${input}\nAssistant:`;
+    const messagesToSend: Array<{ role: "system" | "user"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `${ticketContext}${similarSnippet ? `Most similar tickets:\n${similarSnippet}\n\n` : ""}${mentionInstruction}\n${logInstruction}${formattedHistory}User: ${input}\nAssistant:`,
+      },
+    ];
+
+    if (selectedTicket) {
+      const similar = Array.isArray(similarIssues[selectedTicket.key]) ? similarIssues[selectedTicket.key] ?? [] : [];
+      if (similar.length) {
+        messagesToSend.push({
+          role: "system",
+          content: `
+Here are similar historical Jira issues related to the current ticket. You MUST use them as context in your diagnosis and automatically reference similarities without waiting for the user to ask.
+
+${similar
+  .map(
+    (i) =>
+      `• ${i.key}: ${i.summary}\nDescription: ${(i as any).description ?? ""}\nStatus: ${(i as any).status ?? ""}`,
+  )
+  .join("\n\n")}
+
+When generating the diagnosis, ALWAYS check if any of the above incidents share root causes or symptoms and mention them proactively.
+`,
+        });
+      }
+    }
+
+    const payload = messagesToSend
+      .map((m) => `${m.role === "system" ? "System" : "User"}: ${m.content}`)
+      .join("\n\n");
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
@@ -686,73 +949,164 @@ export default function CommandConsole() {
     ]);
   };
 
-  const handleSelectTicket = async (ticket: TicketType) => {
-    setSelectedTicket(ticket);
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: `Loading ${ticket.key}... fetching full details and similar issues.`,
-      },
-    ]);
-    const headers: Record<string, string> = {};
-    const storedToken =
-      localStorage.getItem("access_token") ||
-      localStorage.getItem("sb-access-token") ||
-      localStorage.getItem("sb-auth-token");
-    if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
-    const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
-    if (orgId) headers["x-org-id"] = orgId;
-    if (user?.id) headers["x-account-id"] = user.id;
-    const license = localStorage.getItem("forge_license_key");
-    if (license) headers["x-license-key"] = license;
-    try {
-      const issue = await getIssueDetails(ticket.key, headers);
-      setIssueDetails((prev) => ({ ...prev, [ticket.key]: issue }));
-
-      const body = JSON.stringify({
-        projectKey: issue.key?.split("-")?.[0],
-        summary: issue.summary,
-        description: issue.descriptionHtml,
-        limit: 5,
-      });
+  const handleSelectTicket = useCallback(
+    async (ticket: TicketType) => {
+      setSelectedTicket(ticket);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Loading ${ticket.key}... fetching full details and similar issues.`,
+        },
+      ]);
+      setSimilarLoading((prev) => ({ ...prev, [ticket.key]: true }));
+      const headers: Record<string, string> = {};
+      const storedToken =
+        localStorage.getItem("access_token") ||
+        localStorage.getItem("sb-access-token") ||
+        localStorage.getItem("sb-auth-token");
+      if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+      const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+      if (orgId) headers["x-org-id"] = orgId;
+      if (user?.id) headers["x-account-id"] = user.id;
+      const license = localStorage.getItem("forge_license_key");
+      if (license) headers["x-license-key"] = license;
       try {
-        const res = await fetch(`${API_BASE}/connectors/jira/api/issues/similar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...headers },
-          credentials: "include",
-          body,
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: data.items ?? [] }));
-        } else {
-          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
-        }
-      } catch (err) {
-        console.error("[console] failed to load similar issues", err);
-        setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
-      }
+        const issue = await getIssueDetails(ticket.key, headers);
+        setIssueDetails((prev) => ({ ...prev, [ticket.key]: issue }));
 
-      const descText = issue.descriptionHtml ? cleanDescription(issue.descriptionHtml) : ticket.description;
-      setMessages((prev) => [
-        ...prev.filter((m) => !m.content.startsWith("Loading ")),
-        {
-          role: "assistant",
-          content: `**${ticket.key}: ${issue.summary || ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${descText}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
-        },
-      ]);
-    } catch (err) {
-      console.error("[console] failed to load issue details", err);
-      setMessages((prev) => [
-        ...prev.filter((m) => !m.content.startsWith("Loading ")),
-        {
-          role: "assistant",
-          content: `**${ticket.key}: ${ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${ticket.description || "Description not available."}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
-        },
-      ]);
+        const body = JSON.stringify({
+          projectKey: issue.key?.split("-")?.[0],
+          summary: issue.summary,
+          description: issue.descriptionHtml,
+          limit: 5,
+        });
+        let fetchedSimilar: SimilarIssue[] = [];
+        try {
+          const res = await fetch(`${API_BASE}/connectors/jira/api/issues/similar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...headers },
+            credentials: "include",
+            body,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            fetchedSimilar =
+              data.items?.map((item: any) => ({
+                ...item,
+                updatedAt: item.updated_at ?? item.updatedAt,
+              })) ?? [];
+            setSimilarIssues((prev) => ({ ...prev, [ticket.key]: fetchedSimilar }));
+          } else {
+            setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+          }
+        } catch (err) {
+          console.error("[console] failed to load similar issues", err);
+          setSimilarIssues((prev) => ({ ...prev, [ticket.key]: [] }));
+        } finally {
+          setSimilarLoading((prev) => ({ ...prev, [ticket.key]: false }));
+        }
+
+        const descText = issue.descriptionHtml ? cleanDescription(issue.descriptionHtml) : ticket.description;
+        const bestSimilar = fetchedSimilar?.[0];
+        const similarIntro = bestSimilar
+          ? `Ticket ${bestSimilar.key} looks similar and was solved${bestSimilar.updatedAt ? ` ${new Date(bestSimilar.updatedAt).toLocaleDateString()}` : ""} by ${
+              bestSimilar.solvedBy || "the team"
+            }.${bestSimilar.howSolved ? ` Here's how it was solved: ${bestSimilar.howSolved}` : ""}`
+          : "";
+
+        setMessages((prev) => [
+          ...prev.filter((m) => !m.content.startsWith("Loading ")),
+          {
+            role: "assistant",
+            content: `${similarIntro ? `${similarIntro}\n\n` : ""}**${ticket.key}: ${issue.summary || ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${descText}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+          },
+        ]);
+      } catch (err) {
+        console.error("[console] failed to load issue details", err);
+        setSimilarLoading((prev) => ({ ...prev, [ticket.key]: false }));
+        setMessages((prev) => [
+          ...prev.filter((m) => !m.content.startsWith("Loading ")),
+          {
+            role: "assistant",
+            content: `**${ticket.key}: ${ticket.title}**\n\n**Priority:** ${ticket.priority}\n**Reporter:** ${ticket.reporter}\n**Status:** ${ticket.status}\n\n**Description:**\n${ticket.description || "Description not available."}\n\nWould you like me to proceed with analyzing and fixing this issue?`,
+          },
+        ]);
+      }
+    },
+    [user],
+  );
+
+  const fetchSimilarIssuesFor = async (ticketKey: string, summary: string, description: string, headers: any) => {
+  try {
+    const res = await fetch(`${API_BASE}/connectors/jira/api/issues/similar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      credentials: "include",
+      body: JSON.stringify({
+        projectKey: ticketKey.split("-")[0],
+        summary,
+        description,
+        limit: 5,
+      }),
+    });
+
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    return (data.items ?? []).map((i: any) => ({
+      ...i,
+      updatedAt: i.updated_at ?? i.updatedAt,
+    }));
+  } catch {
+    return [];
+  }
+};
+
+  const openTicketSolve = useCallback(
+  async (key: string) => {
+    const ticket = findTicketByKey(key);
+    if (ticket) {
+      setShowTicketView(true);
+      setTicketView("pending");
+
+      // 🔥 FIX: REBUILD HEADERS HERE
+      const storedToken =
+        localStorage.getItem("access_token") ||
+        localStorage.getItem("sb-access-token") ||
+        localStorage.getItem("sb-auth-token");
+
+      const headers: Record<string, string> = {};
+      if (storedToken) headers["Authorization"] = `Bearer ${storedToken}`;
+
+      const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id;
+      if (orgId) headers["x-org-id"] = orgId;
+
+      if (user?.id) headers["x-account-id"] = user.id;
+
+      const license = localStorage.getItem("forge_license_key");
+      if (license) headers["x-license-key"] = license;
+
+      // Fetch issue + similar issues BEFORE LLM starts
+      const issue = await getIssueDetails(key, headers);
+      const similar = await fetchSimilarIssuesFor(
+        key,
+        issue.summary,
+        issue.descriptionHtml,
+        headers
+      );
+
+      // Store in state so LLM gets them
+      setSimilarIssues((prev) => ({ ...prev, [key]: similar }));
+
+      // Move into ticket selection flow
+      await handleSelectTicket(ticket);
     }
-  };
+
+    setPendingSolveKey(null);
+  },
+  [findTicketByKey, handleSelectTicket, user]
+);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -995,6 +1349,7 @@ export default function CommandConsole() {
               loading={ticketsLoading}
               issueDetails={issueDetails}
               similarIssues={similarIssues}
+              similarLoading={similarLoading}
               view={ticketView}
               onChangeView={setTicketView}
               onResolveTicket={handleResolveTicket}

@@ -41,7 +41,7 @@ router.get('/graph', async (req, res, next) => {
       (req.headers['x-account-id'] as string) ||
       null;
 
-    const [agentsResult, memoriesResult, tasksResult, integrationResult, docsResult] = await Promise.all([
+    const [agentsResult, memoriesResult, tasksResult, integrationResult, crawlerDocsResult, jiraDocsResult] = await Promise.all([
       pool.query<{
         id: string;
         name: string;
@@ -112,6 +112,19 @@ router.get('/graph', async (req, res, next) => {
           WHERE source_type = 'crawler'
           ORDER BY created_at DESC
           LIMIT 2000`
+      ),
+      pool.query<{
+        id: string;
+        source_id: string | null;
+        metadata: Record<string, unknown> | null;
+        content: string;
+        created_at: string;
+      }>(
+        `SELECT id, source_id, metadata, content, created_at
+          FROM forge_embeddings
+          WHERE source_type = 'jira'
+          ORDER BY created_at DESC
+          LIMIT 2000`
       )
     ]);
 
@@ -142,7 +155,7 @@ router.get('/graph', async (req, res, next) => {
       };
     });
 
-    const documentNodes = docsResult.rows.map((row) => {
+    const crawlerDocumentNodes = crawlerDocsResult.rows.map((row) => {
       const meta = (row.metadata as Record<string, unknown> | null) ?? {};
       const label = (meta.title as string) || row.content || row.source_id || row.id;
       return {
@@ -158,6 +171,30 @@ router.get('/graph', async (req, res, next) => {
         }
       };
     });
+
+    const jiraDocumentNodes = jiraDocsResult.rows.map((row) => {
+      const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+      const label =
+        (meta.key as string) ||
+        (meta.title as string) ||
+        row.source_id ||
+        row.content ||
+        row.id;
+      return {
+        id: `jira-${row.id}`,
+        type: 'document',
+        label: label.length > 80 ? `${label.slice(0, 77)}...` : label,
+        status: 'active' as const,
+        metadata: {
+          createdAt: row.created_at,
+          sourceId: row.source_id,
+          color: '#00A8FF',
+          ...meta
+        }
+      };
+    });
+
+    const documentNodes = [...crawlerDocumentNodes, ...jiraDocumentNodes];
 
     const memoryNodes = memoriesResult.rows.map((memory) => ({
       id: memory.id,
