@@ -6,24 +6,9 @@ export interface AtlasAutomationAgentOptions extends BaseAgentOptions {
   config: Record<string, unknown>;
 }
 
-const DEFAULT_DESCRIPTIONS: Record<string, string> = {
-  'atlas-bridge-orchestrator':
-    'Coordinates Atlas OS bridge workflows, routes module outputs, and manages credential prompts.',
-  'atlas-contracts-agent': 'Handles Atlas OS contract lookups, creation, and status updates.',
-  'atlas-invoices-agent': 'Manages Atlas OS invoice retrieval and reporting.',
-  'atlas-tasks-agent': 'Creates and updates Atlas OS tasks for automation follow-up.',
-  'atlas-notify-agent': 'Sends notifications and agent reports into Atlas OS.',
-  'atlas-workspace-agent': 'Surfaces Atlas OS workspace summaries, plans, and module metadata.',
-};
+const DEFAULT_DESCRIPTIONS: Record<string, string> = {};
 
-const DEFAULT_SHORT_NAMES: Record<string, string> = {
-  'atlas-bridge-orchestrator': 'Atlas Bridge',
-  'atlas-contracts-agent': 'Atlas Contracts',
-  'atlas-invoices-agent': 'Atlas Invoices',
-  'atlas-tasks-agent': 'Atlas Tasks',
-  'atlas-notify-agent': 'Atlas Notify',
-  'atlas-workspace-agent': 'Atlas Workspace',
-};
+const DEFAULT_SHORT_NAMES: Record<string, string> = {};
 
 const normaliseAgentType = (value: string) => value.toLowerCase();
 

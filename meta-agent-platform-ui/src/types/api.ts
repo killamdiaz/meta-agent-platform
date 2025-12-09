@@ -198,6 +198,62 @@ export interface MemoryEntry {
   expires_at: string | null;
 }
 
+export type WorkflowTriggerType = 'manual' | 'time' | 'event' | 'log';
+
+export interface WorkflowTrigger {
+  type: WorkflowTriggerType;
+  schedule?: string;
+  event?: string;
+  description?: string;
+}
+
+export type WorkflowStep =
+  | {
+      id: string;
+      type: 'node';
+      node: string;
+      name?: string;
+      inputs?: Record<string, unknown>;
+      onSuccess?: string;
+      onFailure?: string;
+    }
+  | {
+      id: string;
+      type: 'condition';
+      condition: string;
+      description?: string;
+      onTrue?: string;
+      onFalse?: string;
+    };
+
+export interface WorkflowPlan {
+  name: string;
+  trigger: WorkflowTrigger;
+  steps: WorkflowStep[];
+  requiredNodes: string[];
+  missingNodes: string[];
+}
+
+export interface WorkflowRecord extends WorkflowPlan {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  required_nodes?: string[];
+  missing_nodes?: string[];
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  event_payload?: Record<string, unknown> | null;
+  started_at: string;
+  finished_at?: string | null;
+  error?: string | null;
+  current_step?: string | null;
+  state?: Record<string, unknown> | null;
+}
+
 export interface AgentMemoryResponse {
   items: MemoryEntry[];
   taskCounts: Record<string, number>;

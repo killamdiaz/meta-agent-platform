@@ -56,11 +56,11 @@ const BUILTIN_AGENT_DEFINITIONS: Array<{ keys: string[]; ctor: AgentConstructor 
     ctor: AtlasAutomationAgent as AgentConstructor,
   },
   {
-    keys: ['MemoryGraphAgent', 'memory-graph-agent', 'atlas-memory-agent'],
+    keys: ['MemoryGraphAgent', 'memory-graph-agent'],
     ctor: MemoryGraphAgent as AgentConstructor,
   },
   {
-    keys: ['TaskAgent', 'task-agent', 'atlas-task-agent'],
+    keys: ['TaskAgent', 'task-agent'],
     ctor: TaskAgent as AgentConstructor,
   },
   {
@@ -68,7 +68,7 @@ const BUILTIN_AGENT_DEFINITIONS: Array<{ keys: string[]; ctor: AgentConstructor 
     ctor: CalendarAgent as AgentConstructor,
   },
   {
-    keys: ['FinanceAgent', 'finance-agent', 'atlas-finance-agent'],
+    keys: ['FinanceAgent', 'finance-agent'],
     ctor: FinanceAgent as AgentConstructor,
   },
   {

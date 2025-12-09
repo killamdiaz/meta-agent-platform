@@ -12,6 +12,9 @@ import type {
   AutomationBuilderResponse,
   AutomationPipeline,
   AutomationInterpretationResponse,
+  WorkflowPlan,
+  WorkflowRecord,
+  WorkflowRun,
 } from '@/types/api';
 
 export const API_BASE = (() => {
@@ -313,6 +316,39 @@ export const api = {
         prompt,
         context: context ?? {},
       }),
+    });
+  },
+
+  compileWorkflow(prompt: string): Promise<WorkflowPlan> {
+    return request('/workflows/compile', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    });
+  },
+
+  listWorkflows(): Promise<{ items: WorkflowRecord[] }> {
+    return request('/workflows');
+  },
+
+  getWorkflow(id: string): Promise<WorkflowRecord> {
+    return request(`/workflows/${encodeURIComponent(id)}`);
+  },
+
+  saveWorkflow(plan: WorkflowPlan): Promise<WorkflowRecord> {
+    return request('/workflows', {
+      method: 'POST',
+      body: JSON.stringify(plan),
+    });
+  },
+
+  runWorkflow(id: string, eventPayload?: Record<string, unknown>): Promise<{
+    runId: string;
+    status: WorkflowRun['status'];
+    state?: Record<string, unknown>;
+  }> {
+    return request(`/workflows/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ eventPayload: eventPayload ?? {} }),
     });
   },
 

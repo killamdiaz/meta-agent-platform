@@ -20,7 +20,7 @@ import { StartNode } from "@/components/AgentNetwork/StartNode";
 import { AgentNode } from "@/components/AgentNetwork/AgentNode";
 import { ConfigPanel } from "@/components/AgentNetwork/ConfigPanel";
 import { api } from "@/lib/api";
-import type { AgentRecord, AutomationPipeline, AutomationInstructionAction } from "@/types/api";
+import type { AgentRecord, AutomationPipeline, AutomationInstructionAction, WorkflowPlan } from "@/types/api";
 import { useToast } from "@/components/ui/use-toast";
 import { CreateAgentDrawer } from "@/components/AgentNetwork/CreateAgentDrawer";
 import { useAgentGraphStore } from "@/store/agentGraphStore";
@@ -522,163 +522,71 @@ type ModuleProfile = {
   instructions: string[];
 };
 
-const MODULE_PRESETS: Record<string, ModuleProfile> = {
-  AtlasContractsAgent: {
-    objectives: [
-      "Continuously ingest and summarize new contract updates coming from Atlas systems.",
-      "Surface risks, key dates, and required actions to the Atlas Meta Controller.",
-      "Keep downstream agents informed about contract status changes and approvals.",
-    ],
-    memoryContext:
-      "Maintain a running digest of all contract negotiations, approvals, obligations, and deadlines. Include current owners, counterparties, renewal windows, and signature status for each agreement.",
-    instructions: [
-      "Poll Atlas Bridge contracts endpoint on the cadence provided by the orchestrator.",
-      "Annotate each contract event with risk level, next action, and responsible team.",
-      "Publish concise summaries to the routing queue for finance and operations agents.",
-    ],
-  },
-  AtlasTasksAgent: {
-    objectives: [
-      "Aggregate tasks created across Atlas products and partner systems.",
-      "Detect blockers or overdue work and notify the responsible Atlas squad.",
-      "Feed prioritized task lists to downstream execution agents.",
-    ],
-    memoryContext:
-      "Track active tasks, owners, dependencies, and due dates. Record context about blockers, escalation status, and linked documents so other agents can execute without re-querying the source.",
-    instructions: [
-      "Ingest task updates from Atlas Bridge every time the orchestrator signals new activity.",
-      "Normalize task metadata (status, owner, effort) and highlight changes since last poll.",
-      "Dispatch curated task summaries to the Atlas Meta Controller and subscribers.",
-    ],
-  },
-  AtlasInvoicesAgent: {
-    objectives: [
-      "Monitor invoices flowing through Atlas finance and flag anomalies.",
-      "Coordinate with Atlas Contracts and Accounts Receivable agents to resolve issues.",
-      "Provide real-time reporting on invoice status, payments, and delinquencies.",
-    ],
-    memoryContext:
-      "Maintain invoice ledgers with invoice numbers, customers, payment status, and outstanding balances. Include cross-links to underlying contracts and tasks required for resolution.",
-    instructions: [
-      "Fetch invoice snapshots from Atlas Bridge finance endpoints on each trigger.",
-      "Detect discrepancies such as overdue invoices, missing PO numbers, or mismatched totals.",
-      "Escalate critical invoice events to the Meta Controller and notify finance stakeholders.",
-    ],
-  },
-  AtlasNotifyAgent: {
-    objectives: [
-      "Broadcast critical Atlas platform events to subscribed channels.",
-      "Route notifications to the correct downstream agents based on severity and topic.",
-      "Ensure Meta Controller has concise digests for decision making.",
-    ],
-    memoryContext:
-      "Store notification templates, routing preferences, and recent alerts. Track which squads have acknowledged alerts and outstanding follow-ups.",
-    instructions: [
-      "Receive upstream events from Atlas agents and format them for the notify pipeline.",
-      "Select delivery channels (Slack, email, dashboards) based on routing rules.",
-      "Log delivery receipts and escalate if acknowledgements are missing.",
-    ],
-  },
-  AtlasWorkspaceAgent: {
-    objectives: [
-      "Synthesize Atlas workspace activity into actionable summaries.",
-      "Highlight collaboration hotspots, blockers, and opportunities.",
-      "Support other agents with contextual workspace intelligence.",
-    ],
-    memoryContext:
-      "Capture workspace artifacts, recent collaboration threads, and project milestones. Maintain snapshots so other agents can reference historical context without re-fetching data.",
-    instructions: [
-      "Query Atlas workspace APIs on demand from orchestration triggers.",
-      "Summarize key updates, tagging the relevant squads and linking follow-up tasks.",
-      "Publish structured insights to downstream automation pipelines.",
-    ],
-  },
-  AtlasBridgeAgent: {
-    objectives: [
-      "Serve as the gateway between Atlas agents and external data sources.",
-      "Normalize responses from Atlas Bridge endpoints for downstream consumption.",
-      "Enforce rate limiting and authentication policies for bridge traffic.",
-    ],
-    memoryContext:
-      "Retain metadata about recent bridge calls, caching policies, and API schemas. Keep diagnostics for throttling events and upstream errors to assist debugging.",
-    instructions: [
-      "Handle bridge requests from sibling agents, applying auth credentials securely.",
-      "Transform responses into standardized payloads and flag anomalies.",
-      "Record usage metrics and surface them to monitoring agents.",
-    ],
-  },
-};
-
 const deriveModuleProfile = (
   agentType: string | undefined,
   fallbackName: string,
-  metadata: Record<string, unknown>,
+  metadataInput: Record<string, unknown> | undefined,
 ): ModuleProfile => {
-  const rawObjectives = metadata.objectives;
-  const objectives: string[] =
-    Array.isArray(rawObjectives)
-      ? rawObjectives.map((value) => String(value).trim()).filter((value) => value.length > 0)
-      : typeof rawObjectives === "string"
-      ? rawObjectives
-          .split(/[\n\r]+/)
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-      : [];
+  try {
+    const metadata = isObject(metadataInput) ? metadataInput : {};
+    const rawObjectives = (metadata as { objectives?: unknown }).objectives;
+    const objectives: string[] =
+      Array.isArray(rawObjectives)
+        ? rawObjectives.map((value) => String(value).trim()).filter((value) => value.length > 0)
+        : typeof rawObjectives === "string"
+        ? rawObjectives
+            .split(/[\n\r]+/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+        : [];
 
-  const rawMemory = metadata.memoryContext ?? metadata.memory_context ?? metadata.memory;
-  const memoryContext =
-    typeof rawMemory === "string" && rawMemory.trim().length > 0 ? rawMemory.trim() : undefined;
+    const rawMemory = (metadata as Record<string, unknown>).memoryContext ??
+      (metadata as Record<string, unknown>).memory_context ??
+      (metadata as Record<string, unknown>).memory;
+    const memoryContext =
+      typeof rawMemory === "string" && rawMemory.trim().length > 0 ? rawMemory.trim() : undefined;
 
-  const rawInstructions = metadata.instructions ?? metadata.workplan;
-  const instructions =
-    Array.isArray(rawInstructions)
-      ? rawInstructions.map((value) => String(value).trim()).filter((value) => value.length > 0)
-      : typeof rawInstructions === "string"
-      ? rawInstructions
-          .split(/[\n\r]+/)
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-      : [];
+    const rawInstructions = (metadata as Record<string, unknown>).instructions ??
+      (metadata as Record<string, unknown>).workplan;
+    const instructions =
+      Array.isArray(rawInstructions)
+        ? rawInstructions.map((value) => String(value).trim()).filter((value) => value.length > 0)
+        : typeof rawInstructions === "string"
+        ? rawInstructions
+            .split(/[\n\r]+/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+        : [];
 
-  if (objectives.length || instructions.length) {
-    const fallback = deriveFallbackProfile(agentType, fallbackName);
-    return {
-      objectives: objectives.length ? objectives : fallback.objectives,
-      memoryContext: memoryContext ?? fallback.memoryContext,
-      instructions: instructions.length ? instructions : fallback.instructions,
-    };
+    if (objectives.length || instructions.length) {
+      const fallback = deriveFallbackProfile(agentType, fallbackName);
+      return {
+        objectives: objectives.length ? objectives : fallback.objectives,
+        memoryContext: memoryContext ?? fallback.memoryContext,
+        instructions: instructions.length ? instructions : fallback.instructions,
+      };
+    }
+
+    return deriveFallbackProfile(agentType, fallbackName);
+  } catch (error) {
+    console.warn("[automation-builder] deriveModuleProfile failed; using fallback", error);
+    return deriveFallbackProfile(agentType, fallbackName);
   }
-
-  const preset = agentType && MODULE_PRESETS[agentType];
-  if (preset) {
-    return preset;
-  }
-  return deriveFallbackProfile(agentType, fallbackName);
 };
 
 const deriveFallbackProfile = (agentType: string | undefined, fallbackName: string): ModuleProfile => {
-  if (agentType && MODULE_PRESETS[agentType]) {
-    return MODULE_PRESETS[agentType];
-  }
-  const normalized = fallbackName.toLowerCase();
-  if (normalized.includes("contract")) return MODULE_PRESETS.AtlasContractsAgent;
-  if (normalized.includes("invoice") || normalized.includes("bill")) return MODULE_PRESETS.AtlasInvoicesAgent;
-  if (normalized.includes("task") || normalized.includes("todo")) return MODULE_PRESETS.AtlasTasksAgent;
-  if (normalized.includes("notify") || normalized.includes("alert")) return MODULE_PRESETS.AtlasNotifyAgent;
-  if (normalized.includes("workspace")) return MODULE_PRESETS.AtlasWorkspaceAgent;
-  if (normalized.includes("bridge")) return MODULE_PRESETS.AtlasBridgeAgent;
-  const title = fallbackName.trim().length > 0 ? fallbackName.trim() : "Atlas Agent";
+  const title = fallbackName.trim().length > 0 ? fallbackName.trim() : agentType?.trim() ?? "Automation Agent";
   return {
     objectives: [
-      `Execute the "${title}" responsibilities for the Atlas automation network.`,
-      "Collaborate with sibling agents by publishing actionable summaries.",
-      "Report key outcomes and anomalies back to the Atlas Meta Controller.",
+      `Execute the "${title}" responsibilities in this automation.`,
+      "Collaborate with sibling steps by publishing actionable summaries.",
+      "Report key outcomes and anomalies to downstream steps.",
     ],
-    memoryContext: `Maintain the working memory for the ${title} agent, capturing inputs, decisions, escalations, and outputs so that sibling agents can pick up work seamlessly.`,
+    memoryContext: `Maintain working memory for ${title}, capturing inputs, decisions, escalations, and outputs so sibling steps can continue.`,
     instructions: [
       `Ingest relevant signals for the "${title}" domain.`,
-      "Transform raw data into structured insights and tasks for downstream agents.",
-      "Log context-rich updates to the shared memory store for auditability.",
+      "Transform raw data into structured insights and tasks for downstream steps.",
+      "Log context-rich updates to the shared store for auditability.",
     ],
   };
 };
@@ -1162,12 +1070,21 @@ export default function AgentNetwork() {
       type CreateNodePayload = NonNullable<Extract<AutomationInstructionAction, { type: "create_node" }>['node']>;
 
       const ensureAgentMaterialized = async (nodePayload: CreateNodePayload): Promise<{ id: string; profile: ModuleProfile }> => {
-        const metadata = isObject(nodePayload.metadata) ? (nodePayload.metadata as Record<string, unknown>) : {};
+        const payload: CreateNodePayload = {
+          id: nodePayload?.id ?? ensureUniqueNodeId("node"),
+          agentType: nodePayload?.agentType ?? nodePayload?.id ?? "automation-node",
+          label: nodePayload?.label ?? nodePayload?.agentType ?? nodePayload?.id ?? "Automation Node",
+          type: nodePayload?.type ?? "Action",
+          config: nodePayload?.config ?? {},
+          metadata: nodePayload?.metadata ?? {},
+          position: nodePayload?.position,
+        };
+        const metadata = isObject(payload.metadata) ? (payload.metadata as Record<string, unknown>) : {};
         const rawAliases = [
           typeof metadata.agentId === "string" ? metadata.agentId : undefined,
-          nodePayload.id,
-          nodePayload.agentType,
-          nodePayload.label,
+          payload.id,
+          payload.agentType,
+          payload.label,
         ];
         const aliasCandidates = rawAliases
           .map((value) => (typeof value === "string" ? value.trim() : ""))
@@ -1223,18 +1140,25 @@ export default function AgentNetwork() {
         } // FIX APPLIED: Reuse existing connector agents
 
         const fallbackName =
-          (nodePayload.label && nodePayload.label.trim().length > 0
-            ? nodePayload.label.trim()
-            : nodePayload.agentType && nodePayload.agentType.trim().length > 0
-            ? nodePayload.agentType.trim()
-            : nodePayload.id && nodePayload.id.trim().length > 0
-            ? nodePayload.id.trim()
+          (payload.label && payload.label.trim().length > 0
+            ? payload.label.trim()
+            : payload.agentType && payload.agentType.trim().length > 0
+            ? payload.agentType.trim()
+            : payload.id && payload.id.trim().length > 0
+            ? payload.id.trim()
             : `Agent ${Math.random().toString(36).slice(2, 6)}`).slice(0, 80);
 
         const metadataRole = typeof metadata.role === "string" ? metadata.role.trim() : "";
-        const role = metadataRole.length > 0 ? metadataRole : nodePayload.agentType ?? fallbackName;
+        const role = metadataRole.length > 0 ? metadataRole : payload.agentType ?? fallbackName;
 
-        const profile = deriveModuleProfile(nodePayload.agentType, fallbackName, metadata);
+        let profile = deriveModuleProfile(payload.agentType, fallbackName, metadata);
+        if (!profile || !Array.isArray(profile.objectives)) {
+          profile = deriveFallbackProfile(payload.agentType, fallbackName);
+        }
+        // Ensure objectives always exist to satisfy backend contract.
+        if (!Array.isArray(profile.objectives) || profile.objectives.length === 0) {
+          profile.objectives = [`Run ${fallbackName} tasks`, `Handle ${payload.agentType ?? 'automation'} events`];
+        }
 
         const tools: Record<string, boolean> = {};
         if (isObject(metadata.tools)) {
@@ -1286,7 +1210,7 @@ export default function AgentNetwork() {
               description: error instanceof Error ? error.message : "Unknown error occurred.",
               variant: "destructive",
             });
-            const fallbackId = ensureUniqueNodeId(nodePayload.id ?? nodePayload.label);
+            const fallbackId = ensureUniqueNodeId(payload.id ?? payload.label);
             registerAlias(fallbackId, fallbackId);
             createdLabelSet.add(fallbackName);
             resolvedId = fallbackId;
@@ -1294,7 +1218,7 @@ export default function AgentNetwork() {
         }
 
         if (!resolvedId) {
-          resolvedId = ensureUniqueNodeId(nodePayload.id ?? nodePayload.label);
+          resolvedId = ensureUniqueNodeId(payload.id ?? payload.label);
         }
 
         metadata.objectives = profile.objectives;
@@ -2533,6 +2457,53 @@ export default function AgentNetwork() {
     }
   }, [currentAutomation]);
 
+  const planToActions = useCallback(
+    (plan: WorkflowPlan): AutomationInstructionAction[] => {
+      const actions: AutomationInstructionAction[] = [];
+      if (plan.name) {
+        actions.push({ type: "update_metadata", name: plan.name });
+      }
+      const orderedStepIds: string[] = [];
+      plan.steps.forEach((step, index) => {
+        const stepId = step.id || `step_${index + 1}`;
+        orderedStepIds.push(stepId);
+        if (step.type === "node") {
+          actions.push({
+            type: "create_node",
+            node: {
+              id: stepId,
+              label: step.name ?? step.node,
+              agentType: step.node,
+              type: "Action",
+              config: { inputs: step.inputs ?? {} },
+            },
+          });
+        } else {
+          actions.push({
+            type: "create_node",
+            node: {
+              id: stepId,
+              label: step.description ?? `Condition: ${step.condition}`,
+              agentType: stepId,
+              type: "Processor",
+              config: { metadata: { condition: step.condition } },
+            },
+          });
+        }
+      });
+
+      for (let i = 0; i < orderedStepIds.length - 1; i += 1) {
+        actions.push({
+          type: "connect_nodes",
+          from: orderedStepIds[i],
+          to: orderedStepIds[i + 1],
+        });
+      }
+      return actions;
+    },
+    [],
+  );
+
   const handleAutomationPromptSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -2565,14 +2536,17 @@ export default function AgentNetwork() {
           return;
         } catch (dispatchError) {
           const status = (dispatchError as { status?: number }).status;
-          if (status === 422) {
+          const message =
+            dispatchError instanceof Error
+              ? dispatchError.message
+              : typeof (dispatchError as { message?: unknown }).message === "string"
+              ? (dispatchError as { message?: string }).message
+              : "";
+          const noTools = message.toLowerCase().includes("no tool agents");
+          if (status === 422 || noTools || (typeof status === "number" && status >= 500)) {
             shouldFallbackToBuilder = true;
             setPromptStatus("Interpreting prompt...");
           } else {
-            const message =
-              dispatchError instanceof Error
-                ? dispatchError.message
-                : "Failed to dispatch prompt to a tool agent.";
             setPromptStatus(`⚠️ ${message}`);
             toast({
               title: "Prompt dispatch failed",
@@ -2587,32 +2561,22 @@ export default function AgentNetwork() {
           return;
         }
 
-        const context: { pipeline?: AutomationPipeline; name?: string; description?: string } = {
-          name: automationName,
-          description: automationDescription,
-        };
-        if (automationPipeline && !isBlankAutomation) {
-          context.pipeline = automationPipeline;
-        } else {
-          context.pipeline = { name: "", nodes: [], edges: [] };
+        const plan = await api.compileWorkflow(text);
+        const actions = planToActions(plan);
+        if (!actions.length) {
+          throw new Error("Workflow compiler returned no steps.");
         }
-        const response = await api.interpretAutomationPrompt(text, context);
-        if (!response?.actions || response.actions.length === 0) {
-          throw new Error(response?.message ?? "Could not understand prompt.");
-        }
-        const summary = await applyInstructionActions(response.actions);
-        const interpretationMessage = response.message?.trim() ?? summary ?? "Automation updated.";
+        const summary = await applyInstructionActions(actions);
+        const interpretationMessage =
+          summary ??
+          `✅ Planned workflow "${plan.name || "New Workflow"}" with ${plan.steps.length} steps.`;
         setPromptStatus(interpretationMessage);
         setPromptInput("");
         const normalizedTitle = interpretationMessage.startsWith("✅")
           ? interpretationMessage
           : `✅ ${interpretationMessage}`;
         const description =
-          summary && summary !== interpretationMessage
-            ? summary
-            : response.message && response.message !== interpretationMessage
-            ? response.message
-            : undefined;
+          summary && summary !== interpretationMessage ? summary : undefined;
         toast({
           title: normalizedTitle,
           description,
@@ -2633,10 +2597,8 @@ export default function AgentNetwork() {
     },
     [
       applyInstructionActions,
-      automationDescription,
-      automationName,
-      automationPipeline,
       isPromptSubmitting,
+      planToActions,
       promptInput,
       toast,
     ],

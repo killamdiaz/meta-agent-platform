@@ -30,6 +30,7 @@ import { validateLicense } from './middleware/license.js';
 import licenseRoute from './routes/license.js';
 import deploymentRoute from './routes/deployment.js';
 import samlRoute from './routes/saml.js';
+import workflowsRoute from './routes/workflows.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,6 +81,7 @@ async function bootstrap() {
   app.use('/oauth/jira', buildJiraApiRouter());
   app.use('/usage', usageRoute);
   app.use('/ingestion', ingestionRoute);
+  app.use('/workflows', workflowsRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {
@@ -99,6 +101,7 @@ async function bootstrap() {
       '/exhaust',
       '/ingestion',
       '/usage',
+      '/workflows',
       '/healthz'
     ];
     app.use(express.static(publicDir));

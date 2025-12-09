@@ -40,6 +40,13 @@ export default function Overview() {
     refetchInterval: 20_000,
   });
 
+  const { data: workflowsData, isLoading: workflowsLoading } = useQuery({
+    queryKey: ["workflows"],
+    queryFn: () => api.listWorkflows(),
+    select: (response) => response.items,
+    refetchInterval: 30_000,
+  });
+
   const totalTokens = useTokenStore((state) => state.totalTokens);
   const tokensByAgent = useTokenStore((state) => state.tokensByAgent);
   const setTokenUsage = useTokenStore((state) => state.setUsage);
@@ -93,6 +100,16 @@ export default function Overview() {
       ]
     : [];
 
+  if (workflowsData) {
+    const ready = workflowsData.filter((wf) => (wf.missing_nodes ?? (wf as unknown as { missingNodes?: string[] }).missingNodes ?? []).length === 0).length;
+    overviewStats.push({
+      label: "Active Automations",
+      value: workflowsData.length,
+      change: `${ready} ready`,
+      detail: workflowsData[0]?.name ?? "Prompt-to-workflow",
+    });
+  }
+
   const roleDistribution = agentsData ? formatRoleDistribution(agentsData) : [];
 
   return (
@@ -102,7 +119,7 @@ export default function Overview() {
         <p className="text-muted-foreground">Monitor your AI workforce performance</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         <Card className="bg-card border-border p-6 hover:border-atlas-glow/50 transition-all duration-300">
           <div className="space-y-2">
             <div className="text-sm text-muted-foreground">Tokens Used</div>
@@ -142,7 +159,7 @@ export default function Overview() {
             ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <Card className="bg-card border-border p-6 lg:col-span-2">
           <div className="space-y-4">
             <div>
@@ -190,6 +207,34 @@ export default function Overview() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </Card>
+
+        <Card className="bg-card border-border p-6">
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Automations</h3>
+              <p className="text-sm text-muted-foreground">Prompt-compiled workflows in Atlas Forge</p>
+            </div>
+            <div className="space-y-3">
+              {workflowsLoading && !workflowsData && <Skeleton className="h-32 w-full" />}
+              {(workflowsData ?? []).slice(0, 4).map((workflow) => (
+                <div key={workflow.id} className="p-3 rounded-lg bg-muted/30 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">{workflow.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {(workflow.steps ?? []).length} steps · {(workflow.missing_nodes ?? (workflow as unknown as { missingNodes?: string[] }).missingNodes ?? []).length} missing
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-muted-foreground capitalize">
+                    {(workflow as unknown as { trigger?: { type?: string } }).trigger?.type ?? "manual"}
+                  </span>
+                </div>
+              ))}
+              {(workflowsData?.length ?? 0) === 0 && !workflowsLoading && (
+                <div className="text-sm text-muted-foreground">No automations saved yet.</div>
+              )}
             </div>
           </div>
         </Card>
