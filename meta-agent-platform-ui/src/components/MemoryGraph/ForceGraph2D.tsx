@@ -60,6 +60,26 @@ function computeBrainTarget(node: GraphNodeType, index: number, total: number) {
   return { x, y };
 }
 
+function computeOrbitTarget(
+  node: GraphNodeType,
+  typeIndex: number,
+  typeTotal: number,
+  radiusOverrides?: Partial<Record<GraphNodeType["type"], number>>,
+) {
+  const baseRadius: Record<GraphNodeType["type"], number> = {
+    agent: 120,
+    integration: 140,
+    document: 320,
+    memory: 240,
+  } as const;
+  const radius = (radiusOverrides?.[node.type] as number | undefined) ?? baseRadius[node.type] ?? 220;
+  const angle = (typeIndex / Math.max(1, typeTotal)) * Math.PI * 2;
+  const wobble = (hashToUnit(node.id, "orbit") - 0.5) * 0.35;
+  const x = Math.cos(angle + wobble) * radius;
+  const y = Math.sin(angle + wobble) * radius;
+  return { x, y };
+}
+
 export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<any>();
@@ -84,9 +104,20 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
 
   const sanitizedData = useMemo(() => {
     const total = Math.max(1, data.nodes.length);
+    const isLarge = data.nodes.length > 1000;
+    const typeTotals: Record<string, number> = {};
+    data.nodes.forEach((node) => {
+      typeTotals[node.type] = (typeTotals[node.type] ?? 0) + 1;
+    });
+    const typeCounters: Record<string, number> = {};
+
     const nodes = data.nodes.map((node, index) => {
       const clone: PositionedGraphNode = { ...node };
-      const target = computeBrainTarget(clone, index, total);
+      const typeIndex = typeCounters[clone.type] ?? 0;
+      typeCounters[clone.type] = typeIndex + 1;
+      const target = isLarge
+        ? computeOrbitTarget(clone, typeIndex, typeTotals[clone.type] ?? total)
+        : computeBrainTarget(clone, index, total);
       clone.brainX = target.x;
       clone.brainY = target.y;
 
@@ -116,6 +147,10 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
       })
       .filter((link) => link._sourceId !== link._targetId && nodeIds.has(link._sourceId) && nodeIds.has(link._targetId))
       .map(({ _sourceId, _targetId, ...link }) => link);
+
+    if (isLarge) {
+      return { nodes, links };
+    }
 
     const agentIds = nodes.filter((node) => node.type === "agent" || node.type === "integration").map((node) => node.id);
     const nonAgentNodes = nodes.filter((node) => node.type !== "agent" && node.type !== "integration").map((node) => node.id);
@@ -176,9 +211,10 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
     }
 
     const size = Math.max(220, Math.min(dimensions.width, dimensions.height) / 1.9 || 260);
+    const isLarge = sanitizedData.nodes.length > 1000;
 
-    const brainForceX = forceX<PositionedGraphNode>((node) => node.brainX ?? 0).strength(0.12);
-    const brainForceY = forceY<PositionedGraphNode>((node) => node.brainY ?? 0).strength(0.12);
+    const brainForceX = forceX<PositionedGraphNode>((node) => node.brainX ?? 0).strength(isLarge ? 0.18 : 0.12);
+    const brainForceY = forceY<PositionedGraphNode>((node) => node.brainY ?? 0).strength(isLarge ? 0.18 : 0.12);
 
     const graph = fgRef.current;
     if (!graph || typeof graph.d3Force !== "function") {
@@ -190,12 +226,12 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
 
     const chargeForce = graph.d3Force("charge");
     if (chargeForce && typeof chargeForce.strength === "function") {
-      chargeForce.strength(-80);
+      chargeForce.strength(isLarge ? -160 : -80);
       if (typeof chargeForce.distanceMin === "function") {
         chargeForce.distanceMin(12);
       }
       if (typeof chargeForce.distanceMax === "function") {
-        chargeForce.distanceMax(size * 2.6);
+        chargeForce.distanceMax(size * (isLarge ? 3 : 2.6));
       }
     }
 

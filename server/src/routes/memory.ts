@@ -72,7 +72,7 @@ router.get('/graph', async (req, res, next) => {
             AND m.content NOT ILIKE 'slack user%'
             AND ($1::text IS NULL OR m.metadata->>'userId' = $1)
           ORDER BY m.created_at DESC
-          LIMIT 300`,
+          LIMIT 5000`,
         [userId]
       ),
       pool.query<{
@@ -85,7 +85,7 @@ router.get('/graph', async (req, res, next) => {
         `SELECT id, agent_id, prompt, status, created_at
            FROM tasks
           ORDER BY created_at DESC
-          LIMIT 50`
+          LIMIT 200`
       ),
       pool.query<{
         id: string;
@@ -95,10 +95,10 @@ router.get('/graph', async (req, res, next) => {
         created_at: string;
       }>(
         `SELECT id, source_id, metadata, content, created_at
-           FROM forge_embeddings
+          FROM forge_embeddings
           WHERE source_type = 'integration'
           ORDER BY created_at DESC
-          LIMIT 50`
+          LIMIT 500`
       ),
       pool.query<{
         id: string;
@@ -108,10 +108,10 @@ router.get('/graph', async (req, res, next) => {
         created_at: string;
       }>(
         `SELECT id, source_id, metadata, content, created_at
-           FROM forge_embeddings
+          FROM forge_embeddings
           WHERE source_type = 'crawler'
           ORDER BY created_at DESC
-          LIMIT 200`
+          LIMIT 2000`
       )
     ]);
 

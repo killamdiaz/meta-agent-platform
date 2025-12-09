@@ -351,8 +351,9 @@ export default function CommandConsole() {
         changelog: issue?.changelog,
       },
     };
+    let patchError: unknown = null;
     try {
-      await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}`, {
+      const patchRes = await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...headers },
         credentials: "include",
@@ -363,23 +364,43 @@ export default function CommandConsole() {
           },
         }),
       });
+      if (!patchRes.ok) {
+        const text = await patchRes.text();
+        throw new Error(text || patchRes.statusText);
+      }
+    } catch (err) {
+      patchError = err;
+      console.warn("[console] jira resolve failed, continuing to ingest", err);
+    }
+
+    try {
       await fetch(`${API_BASE}/connectors/jira/api/issues/ingest`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
         credentials: "include",
         body: JSON.stringify(payload),
       });
-      setTickets((prev) => prev.map((t) => (t.key === ticket.key ? { ...t, status: "closed" } : t)));
-      setTicketView("resolved");
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `Ticket ${ticket.key} resolved and ingested.` },
-      ]);
-      setToast(`Ticket ${ticket.key} resolved`);
-      setTimeout(() => setToast(null), 3000);
     } catch (err) {
       console.error("[console] failed to ingest resolved ticket", err);
     }
+
+    setTickets((prev) => prev.map((t) => (t.key === ticket.key ? { ...t, status: "closed" } : t)));
+    setTicketView("pending");
+    setSelectedTicket(null);
+    void fetchIssues();
+    setShowTicketView(true);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        content:
+          patchError == null
+            ? `Ticket ${ticket.key} resolved in Jira and ingested into the KB for the memory graph. Pick your next ticket from the list to continue.`
+            : `Ticket ${ticket.key} ingested and marked closed locally. Jira resolve may have failed (${(patchError as Error)?.message ?? "unknown error"}). Pick your next ticket to continue.`,
+      },
+    ]);
+    setToast(`Ticket ${ticket.key} resolved`);
+    setTimeout(() => setToast(null), 3000);
   };
 
   const handleSend = async () => {
