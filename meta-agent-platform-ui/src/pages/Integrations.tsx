@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { api, API_BASE, apiBaseUrl } from "@/lib/api";
+import { useBrandStore } from "@/store/brandStore";
 
 interface IntegrationCard {
   id: string;
@@ -65,7 +66,7 @@ const integrationCards: IntegrationCard[] = [
   {
     id: "confluence",
     title: "Confluence",
-    description: "Allow Atlas Forge to index documentation and use it as reasoning context.",
+    description: "Allow Atlas Engine to index documentation and use it as reasoning context.",
     icon: BookOpen,
     actionText: "Connect",
   },
@@ -335,6 +336,12 @@ export default function Integrations() {
   const { user } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
   const accountId = user?.id ?? null;
+  const brandShort = useBrandStore(
+    (state) => state.shortName?.trim() || state.companyName?.trim() || "Atlas",
+  );
+  const engineName = useBrandStore(
+    (state) => `${state.companyName?.trim() || "Atlas"} Engine`,
+  );
   const [loading, setLoading] = useState<string | null>(null);
   const [slackStatus, setSlackStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
   const [jiraStatus, setJiraStatus] = useState<'unknown' | 'active' | 'inactive'>('unknown');
@@ -424,7 +431,7 @@ export default function Integrations() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Integrations</h1>
           <p className="text-muted-foreground mt-1">
-            Connect external apps and identity providers to Atlas Forge
+            Connect external apps and identity providers to {engineName}
           </p>
         </div>
       </div>
@@ -437,6 +444,13 @@ export default function Integrations() {
           const isJira = integration.id === "jira";
           const isConnected = isSlack && slackStatus === "active";
           const jiraConnected = isJira && jiraStatus === "active";
+          const title = integration.id === "atlas-auth" ? `${brandShort} Account Login` : integration.title;
+          const description =
+            integration.id === "confluence"
+              ? `Allow ${engineName} to index documentation and use it as reasoning context.`
+              : integration.id === "atlas-auth"
+                ? `Standard login using the ${brandShort} identity provider.`
+              : integration.description;
 
           return (
             <Card key={integration.id} className="hover:shadow-md transition-shadow">
@@ -447,7 +461,7 @@ export default function Integrations() {
                       <Icon className="w-5 h-5 text-primary" />
                     </div>
                     <CardTitle className="text-lg font-semibold flex items-center gap-2">
-                      {integration.title}
+                      {title}
                       {integration.isNew && (
                         <Badge variant="secondary" className="bg-green-100 text-green-700 text-xs">
                           NEW
@@ -476,7 +490,7 @@ export default function Integrations() {
               </CardHeader>
 
               <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground leading-relaxed">{integration.description}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
 
                 <Button
                   variant={integration.comingSoon ? "secondary" : "outline"}

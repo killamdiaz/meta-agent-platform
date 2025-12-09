@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
+import { useBrandStore } from "@/store/brandStore";
 
 interface IngestionJob {
   id: string;
@@ -32,6 +33,9 @@ const safe = (value: any): string =>
 export default function DataSources() {
   const { user } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
+  const engineName = useBrandStore(
+    (state) => `${state.companyName?.trim() || "Atlas"} Engine`,
+  );
 
   const [kbURL, setKbURL] = useState("");
   const [ingestionJobs, setIngestionJobs] = useState<IngestionJob[]>([]);
@@ -147,7 +151,7 @@ export default function DataSources() {
 
           <CardContent className="space-y-6">
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Add your documentation base URL and Atlas Forge will crawl, extract, chunk, embed and index all pages in
+              Add your documentation base URL and {engineName} will crawl, extract, chunk, embed and index all pages in
               the background. Perfect for product docs, help centers, or wikis.
             </p>
 

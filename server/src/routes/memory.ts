@@ -33,8 +33,14 @@ function mapMemoryStatus(memory: { created_at: string }): 'active' | 'new' | 'ol
   return 'forgotten';
 }
 
-router.get('/graph', async (_req, res, next) => {
+router.get('/graph', async (req, res, next) => {
   try {
+    const userId =
+      (req.query.userId as string) ||
+      (req.headers['x-user-id'] as string) ||
+      (req.headers['x-account-id'] as string) ||
+      null;
+
     const [agentsResult, memoriesResult, tasksResult, integrationResult, docsResult] = await Promise.all([
       pool.query<{
         id: string;
@@ -64,8 +70,10 @@ router.get('/graph', async (_req, res, next) => {
             AND m.content NOT ILIKE 'reply to %'
             AND m.content NOT ILIKE 'sent to slack%'
             AND m.content NOT ILIKE 'slack user%'
+            AND ($1::text IS NULL OR m.metadata->>'userId' = $1)
           ORDER BY m.created_at DESC
-          LIMIT 300`
+          LIMIT 300`,
+        [userId]
       ),
       pool.query<{
         id: string;
@@ -145,7 +153,7 @@ router.get('/graph', async (_req, res, next) => {
         metadata: {
           createdAt: row.created_at,
           sourceId: row.source_id,
-          color: '#a855f7',
+          color: '#f97316',
           ...meta
         }
       };

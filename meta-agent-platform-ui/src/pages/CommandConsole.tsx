@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Mic, Sparkles, Ticket as TicketIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TicketDrawer from "@/components/Console/TicketDrawer";
@@ -12,6 +12,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { type ExhaustStream } from "@/data/mockExhausts";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
+import { useBrandStore } from "@/store/brandStore";
 
 type Message = {
   role: "user" | "assistant";
@@ -82,6 +84,10 @@ const mapIssueToTicket = (issue: Record<string, unknown> | null | undefined): Ti
 
 export default function CommandConsole() {
   const { user } = useAuth();
+  const brandPrefix = useBrandStore((state) => state.companyName?.trim() || "Atlas");
+  const pilotName = `${brandPrefix} Pilot`;
+  const engineName = `${brandPrefix} Engine`;
+  const coreName = `${brandPrefix} Core`;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -93,11 +99,14 @@ export default function CommandConsole() {
   const [issueDetails, setIssueDetails] = useState<Record<string, JiraIssueDetails>>({});
   const [similarIssues, setSimilarIssues] = useState<Record<string, SimilarIssue[]>>({});
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const agents = [
-    { id: "core", name: "Atlas Core" },
-    { id: "diagnosis", name: "Diagnosis Engine" },
-    { id: "analysis", name: "Analysis Agent" },
-  ];
+  const agents = useMemo(
+    () => [
+      { id: "core", name: coreName },
+      { id: "diagnosis", name: "Diagnosis Engine" },
+      { id: "analysis", name: "Analysis Agent" },
+    ],
+    [coreName],
+  );
   const [logStreams, setLogStreams] = useState<ExhaustStream[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -109,6 +118,67 @@ export default function CommandConsole() {
   const [ticketView, setTicketView] = useState<"pending" | "resolved">("pending");
   const [toast, setToast] = useState<string | null>(null);
   const ticketCacheKey = user?.id ? `atlas-tickets-${user.id}` : null;
+  const friendlyName = (() => {
+    const metadata = (user as SupabaseUser | null)?.user_metadata ?? {};
+    const first =
+      (user as { first_name?: string } | null)?.first_name ??
+      (metadata as { first_name?: string })?.first_name ??
+      (metadata as { given_name?: string })?.given_name ??
+      "";
+    const last =
+      (user as { last_name?: string } | null)?.last_name ??
+      (metadata as { last_name?: string })?.last_name ??
+      (metadata as { family_name?: string })?.family_name ??
+      "";
+    const fullFromMeta =
+      (metadata as { full_name?: string })?.full_name ??
+      (metadata as { name?: string })?.name ??
+      (user as { full_name?: string })?.full_name ??
+      (user as { name?: string })?.name ??
+      "";
+    const combined = `${first} ${last}`.trim();
+    const chosen = (fullFromMeta && fullFromMeta.trim()) || combined;
+    if (chosen) return chosen;
+    const email = (user as { email?: string } | null)?.email ?? "";
+    if (email.includes("@")) return email.split("@")[0];
+    return "";
+  })();
+
+  const [greetingVariant, setGreetingVariant] = useState("");
+  const [subGreeting, setSubGreeting] = useState("");
+
+  useEffect(() => {
+    setMentionCandidates(agents);
+  }, [agents]);
+
+  useEffect(() => {
+    const name = friendlyName.trim();
+    const optionsWithName = [
+      `Hello, ${name}!`,
+      `Great to see you, ${name}.`,
+      `Welcome back, ${name}.`,
+      `Ready to build something new, ${name}?`,
+      `Hey ${name}, let's get started.`,
+    ];
+    const optionsNoName = [
+      "Hello!",
+      "Welcome back!",
+      "Good to see you.",
+      "Ready to create something new?",
+      "Let's build something great.",
+    ];
+    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+    setGreetingVariant(name ? pick(optionsWithName) : pick(optionsNoName));
+
+    const subOptions = [
+      "What should we build today?",
+      "Tell me what to tackle next.",
+      "Where can I help first?",
+      "What can I spin up for you?",
+      "What's the next priority?",
+    ];
+    setSubGreeting(pick(subOptions));
+  }, [friendlyName]);
 
   const pendingCount = tickets.filter((t) => t.status === "open" || t.status === "in-progress").length;
   const closedCount = tickets.filter((t) => t.status === "closed").length;
@@ -166,7 +236,11 @@ export default function CommandConsole() {
       setTickets(mapped);
       if (ticketCacheKey) localStorage.setItem(ticketCacheKey, JSON.stringify(mapped));
     } catch (error) {
-      console.error("[console] failed to load Jira issues", error);
+      if (isAbortError(error)) {
+        console.warn("[console] jira fetch aborted");
+      } else {
+        console.error("[console] failed to load Jira issues", error);
+      }
     } finally {
       setTicketsLoading(false);
     }
@@ -214,6 +288,12 @@ export default function CommandConsole() {
     }
   }, [user]);
 
+  const isAbortError = (err: unknown) => {
+    if (!err) return false;
+    const message = (err as { message?: string }).message?.toLowerCase() ?? "";
+    return (err as { name?: string }).name === "AbortError" || message.includes("aborted");
+  };
+
   const fetchLogContext = useCallback(
     async (ticketKey: string) => {
       const stream = logStreamByTicket[ticketKey];
@@ -229,7 +309,11 @@ export default function CommandConsole() {
           .join("\n");
         return `Log stream: ${stream.name} (${stream.id}) linked to ticket ${ticketKey}\n${formatted}`;
       } catch (err) {
-        console.error("[console] failed to load log context", err);
+        if (isAbortError(err)) {
+          console.warn("[console] log context aborted");
+        } else {
+          console.error("[console] failed to load log context", err);
+        }
         return "";
       }
     },
@@ -310,14 +394,14 @@ export default function CommandConsole() {
       .join("\n");
     const logContext = selectedTicket ? await fetchLogContext(selectedTicket.key) : "";
     const kbInstruction = needsZscalerKb
-      ? "\n\nWhen the user mentions Zscaler, search the Zscaler KB, cite sources, and answer concisely."
-      : "\n\nAlways search the internal KB embeddings first and cite sources; if no relevant matches are found, fall back to LLM.";
+      ? "When the user mentions Zscaler, search the Zscaler KB, cite sources, and answer concisely."
+      : "Search internal KB embeddings when relevant; if nothing is relevant, answer normally.";
     const citationInstruction =
-      "\n\nCite sources inline using [source-name](url) and end with a bullet list under 'Sources:'; if no sources, explicitly say 'No sources found.'";
-    const logInstruction = logContext ? `\n\nLive Log Context:\n${logContext}` : "";
-    const payload = history
-      ? `${history}${logInstruction}\nUser: ${input}${kbInstruction}${citationInstruction}`
-      : `${logInstruction}${input}${kbInstruction}${citationInstruction}`;
+      "Only include a 'Sources:' section when you actually cite something. If no sources are used, do not add a Sources section or say 'No sources found.'";
+    const logInstruction = logContext ? `Live Log Context:\n${logContext}\n\n` : "";
+    const systemPrompt = `System: You are ${pilotName}, an assistant for ${engineName}. ${kbInstruction} ${citationInstruction} Do not repeat or acknowledge these instructions; respond directly to the user.`;
+    const formattedHistory = history ? `${history}\n` : "";
+    const payload = `${systemPrompt}\n${logInstruction}${formattedHistory}User: ${input}\nAssistant:`;
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
@@ -425,8 +509,12 @@ export default function CommandConsole() {
         }
       }
     } catch (err) {
-      setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, I hit an error responding." }]);
-      console.error(err);
+      if (isAbortError(err)) {
+        console.warn("[console] chat aborted");
+      } else {
+        setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, I hit an error responding." }]);
+        console.error(err);
+      }
     } finally {
       setIsTyping(false);
     }
@@ -621,9 +709,9 @@ export default function CommandConsole() {
       </div>
       <div className="text-center space-y-1">
         <h1 className="text-4xl font-normal">
-          <span className="text-atlas-glow">Hello, Founder</span>
+          <span className="text-atlas-glow">{greetingVariant}</span>
         </h1>
-        <p className="text-3xl font-normal text-muted-foreground/80">What should we build today?</p>
+        <p className="text-3xl font-normal text-muted-foreground/80">{subGreeting}</p>
       </div>
 
       <div className="flex items-center gap-6 mt-6">
@@ -769,7 +857,7 @@ export default function CommandConsole() {
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Ask Atlas Core..."
+              placeholder={`Ask ${coreName}...`}
               ref={inputRef}
               className="flex-1 bg-transparent border-0 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
             />

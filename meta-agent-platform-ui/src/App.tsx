@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,6 +25,8 @@ import { useSupabaseTokenSync } from "@/hooks/useSupabaseTokenSync";
 import useAgentGraphStream from "@/hooks/useAgentGraphStream";
 import { LicenseBanner } from "@/components/LicenseBanner";
 import { useLicenseStatus } from "@/hooks/useLicenseStatus";
+import { useBrandStore } from "@/store/brandStore";
+import { api } from "@/lib/api";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +41,9 @@ const AppRoutes = () => {
   const location = useLocation();
   const hideSidebar = location.pathname.startsWith("/login") || location.pathname.startsWith("/auth");
   const { data: license, isExpired, isWarning } = useLicenseStatus();
+  const engineName = useBrandStore(
+    (state) => `${state.companyName?.trim() || "Atlas"} Engine`,
+  );
   const banner = isExpired
     ? { kind: "expired" as const, message: "Important: Licence expired" }
     : isWarning
@@ -50,7 +56,8 @@ const AppRoutes = () => {
       <Route path="/auth/callback" element={<AuthCallback />} />
 
       <Route element={<ProtectedRoute />}>
-        <Route path="/" element={<Overview />} />
+        <Route path="/" element={<CommandConsole />} />
+        <Route path="/overview" element={<Overview />} />
         <Route path="/network" element={<AgentNetwork />} />
         <Route path="/memory" element={<MemoryGraph />} />
         <Route path="/multi-agent" element={<MultiAgentConsole />} />
@@ -80,7 +87,7 @@ const AppRoutes = () => {
             <div className="absolute inset-0 z-20 bg-background/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 p-6 text-center">
               <p className="text-lg font-semibold">Important: Liscence expired</p>
               <p className="text-sm text-muted-foreground">
-                Your token allowance has been exhausted or the license is invalid. Please renew your license to continue using Atlas Forge.
+                Your token allowance has been exhausted or the license is invalid. Please renew your license to continue using {engineName}.
               </p>
               <a
                 href="/settings"
@@ -100,6 +107,24 @@ const AppRoutes = () => {
 const App = () => {
   useSupabaseTokenSync();
   useAgentGraphStream(true);
+  const setBranding = useBrandStore((state) => state.setBranding);
+
+  useEffect(() => {
+    api
+      .fetchBranding()
+      .then((data) => {
+        setBranding({
+          companyName: data.companyName,
+          shortName: data.shortName,
+          logoUrl: data.logoData || undefined,
+          sidebarLogoUrl: data.sidebarLogoData || undefined,
+          faviconUrl: data.faviconData || undefined,
+          loginLogoUrl: data.loginLogoData || undefined,
+          showSidebarText: data.showSidebarText ?? true,
+        });
+      })
+      .catch((err) => console.warn("[branding] hydrate failed", err));
+  }, [setBranding]);
 
   return (
     <QueryClientProvider client={queryClient}>

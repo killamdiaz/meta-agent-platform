@@ -32,7 +32,7 @@ export function Legend({ data }: LegendProps) {
               <span className="text-foreground">{stats.memories} memories</span>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <div className="w-3 h-3 rounded bg-purple-500" />
+              <div className="w-3 h-3 rounded bg-orange-500" />
               <span className="text-foreground">{stats.documents} documents</span>
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -53,7 +53,7 @@ export function Legend({ data }: LegendProps) {
           </div>
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs">
-              <div className="w-3 h-3 rounded bg-purple-500/80" />
+              <div className="w-3 h-3 rounded bg-orange-500/80" />
               <span className="text-foreground">Document</span>
             </div>
             <div className="flex items-center gap-2 text-xs">

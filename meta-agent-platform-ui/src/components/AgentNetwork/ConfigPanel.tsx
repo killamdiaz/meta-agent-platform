@@ -37,6 +37,7 @@ const statusOptions: AgentRecord["status"][] = ["idle", "working", "error"];
 
 export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }: ConfigPanelProps) {
   const selectAgent = useAgentStore((state) => state.selectAgent);
+  const idSuffix = agent?.id ?? "agent";
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [objectives, setObjectives] = useState("");
@@ -231,9 +232,9 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-name">Name</Label>
+        <Label htmlFor={`field-${idSuffix}-name`}>Name</Label>
         <Input
-          id="agent-name"
+          id={`field-${idSuffix}-name`}
           value={name}
           onChange={(event) => setName(event.target.value)}
           className="bg-background border-border"
@@ -241,9 +242,9 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-role">Instructions</Label>
+        <Label htmlFor={`field-${idSuffix}-role`}>Instructions</Label>
         <Textarea
-          id="agent-role"
+          id={`field-${idSuffix}-role`}
           value={role}
           onChange={(event) => setRole(event.target.value)}
           className="bg-background border-border min-h-[120px]"
@@ -252,10 +253,13 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label htmlFor="agent-status">Status</Label>
+          <Label htmlFor={`field-${idSuffix}-status`}>Status</Label>
         </div>
-        <Select value={status} onValueChange={(value: AgentRecord["status"]) => setStatus(value)}>
-          <SelectTrigger className="bg-background border-border">
+        <Select
+          value={status}
+          onValueChange={(value: AgentRecord["status"]) => setStatus(value)}
+        >
+          <SelectTrigger id={`field-${idSuffix}-status`} className="bg-background border-border">
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="bg-popover border-border">
@@ -270,18 +274,18 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
 
       <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/10 p-3">
         <div>
-          <Label className="text-sm">Autonomous internet access</Label>
+          <Label className="text-sm" htmlFor={`field-${idSuffix}-internet`}>Autonomous internet access</Label>
           <p className="text-xs text-muted-foreground">
             Toggle to allow this agent to call the sandboxed internet module. Disabled by default.
           </p>
         </div>
-        <Switch checked={internetAccess} onCheckedChange={setInternetAccess} />
+        <Switch id={`field-${idSuffix}-internet`} checked={internetAccess} onCheckedChange={setInternetAccess} />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-objectives">Objectives</Label>
+        <Label htmlFor={`field-${idSuffix}-objectives`}>Objectives</Label>
         <Textarea
-          id="agent-objectives"
+          id={`field-${idSuffix}-objectives`}
           placeholder="One per line"
           value={objectives}
           onChange={(event) => setObjectives(event.target.value)}
@@ -290,9 +294,9 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-memory">Memory context</Label>
+        <Label htmlFor={`field-${idSuffix}-memory`}>Memory context</Label>
         <Textarea
-          id="agent-memory"
+          id={`field-${idSuffix}-memory`}
           placeholder="Persistent context shared with the sandbox"
           value={memoryContext}
           onChange={(event) => setMemoryContext(event.target.value)}
@@ -318,7 +322,9 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
       <div className="space-y-3 rounded-lg border border-border/60 bg-muted/10 p-4">
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-sm">Tool configuration</Label>
+            <Label className="text-sm" htmlFor={`field-${idSuffix}-tool-config`}>
+              Tool configuration
+            </Label>
             <p className="text-xs text-muted-foreground">Store sandbox credentials securely per agent.</p>
           </div>
           {(configLoading || configInferenceLoading) && (
@@ -371,7 +377,7 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
 
       <Separator />
 
-      <div className="space-y-2">
+      <div className="space-y-2" id={`field-${idSuffix}-recent-memory`}>
         <div className="flex items-center justify-between">
           <Label>Recent memory</Label>
           {memoryLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -421,7 +427,7 @@ export function ConfigPanel({ agent, onUpdate, onDelete, isSaving, isDeleting }:
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2" id={`field-${idSuffix}-task-summary`}>
         <Label>Task summary</Label>
         <div className="grid grid-cols-3 gap-2 text-xs">
           {Object.entries(memoryData?.taskCounts ?? {}).map(([key, value]) => (

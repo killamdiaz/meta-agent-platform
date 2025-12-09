@@ -6,12 +6,16 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiBaseUrl } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/context/AuthContext";
 
 export default function MemoryGraph() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const userId = (user as { id?: string } | null)?.id ?? null;
   const { data, isLoading } = useQuery({
-    queryKey: ["memory", "graph"],
-    queryFn: () => api.fetchMemoryGraph(),
+    queryKey: ["memory", "graph", userId],
+    queryFn: () => api.fetchMemoryGraph(userId || undefined),
+    enabled: true,
     refetchInterval: 60_000,
   });
 

@@ -393,6 +393,22 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_workflow_states_run ON workflow_states(workflow_run_id);
+
+    CREATE TABLE IF NOT EXISTS branding (
+      id UUID PRIMARY KEY,
+      company_name TEXT NOT NULL,
+      short_name TEXT NOT NULL,
+      logo_data TEXT,
+      sidebar_logo_data TEXT,
+      favicon_data TEXT,
+      login_logo_data TEXT,
+      show_sidebar_text BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO branding (id, company_name, short_name, show_sidebar_text)
+    VALUES ('00000000-0000-0000-0000-000000000001', 'Atlas', 'Atlas', TRUE)
+    ON CONFLICT (id) DO NOTHING;
   `);
 
   if (config.defaultOrgId) {

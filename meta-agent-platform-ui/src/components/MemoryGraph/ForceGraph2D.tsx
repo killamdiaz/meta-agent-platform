@@ -314,7 +314,7 @@ export function ForceGraph2DComponent({ data }: ForceGraph2DProps) {
 
     switch (node.type) {
       case "document":
-        return "#8b5cf6";
+        return (node.metadata?.color as string) || "#f97316";
       case "agent": {
         return "#ffffff";
       }

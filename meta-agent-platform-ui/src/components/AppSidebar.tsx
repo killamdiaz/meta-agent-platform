@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { formatDistanceToNowStrict } from "date-fns";
 import { useTokenStore } from "@/store/tokenStore";
+import { useBrandStore } from "@/store/brandStore";
 import { useAuth } from "@/context/AuthContext";
 import {
   DropdownMenu,
@@ -27,11 +28,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const navigation = [
+const baseNavigation = [
   { name: "Agent Network", href: "/network", icon: Network },
   { name: "Memory Graph", href: "/memory", icon: Brain },
-  { name: "Overview", href: "/", icon: LayoutDashboard },
-  { name: "Command Console", href: "/console", icon: MessageSquare },
+  { name: "Overview", href: "/overview", icon: LayoutDashboard },
   { name: "Exhausts", href: "/exhausts", icon: Activity },
   { name: "Tool Agents", href: "/multi-agent/runtime", icon: Radio },
 ];
@@ -54,6 +54,13 @@ export function AppSidebar() {
   const totalTokens = useTokenStore((state) => state.totalTokens);
   const tokensLastUpdated = useTokenStore((state) => state.lastUpdated);
   const setTokenUsage = useTokenStore((state) => state.setUsage);
+  const brandPrefix = useBrandStore((state) => state.companyName?.trim() || "Atlas");
+  const brandLogo = useBrandStore(
+    (state) => state.sidebarLogoUrl || state.logoUrl || state.loginLogoUrl || "/icon.png",
+  );
+  const engineName = `${brandPrefix} Engine`;
+  const showSidebarText = useBrandStore((state) => state.showSidebarText ?? true);
+  const pilotName = `${brandPrefix} Pilot`;
   const { user, signOut } = useAuth();
   const orgId = (user?.user_metadata as { org_id?: string } | undefined)?.org_id ?? user?.id ?? null;
 
@@ -63,21 +70,25 @@ export function AppSidebar() {
     }
   }, [overview, setTokenUsage]);
 
-  useQuery({
+  const { data: usageSummary } = useQuery({
     queryKey: ["usage", "summary", orgId],
     queryFn: () => api.fetchUsageSummary(orgId as string),
     enabled: Boolean(orgId),
     staleTime: 30_000,
     refetchInterval: 60_000,
-    onSuccess: (summary) => {
-      if (summary?.total_tokens !== undefined) {
-        setTokenUsage({
-          total: Number(summary.total_tokens) || 0,
-          byAgent: {},
-        });
-      }
-    },
+    refetchOnMount: true,
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    if (usageSummary?.total_tokens !== undefined) {
+      setTokenUsage({
+        total: Number(usageSummary.total_tokens) || 0,
+        byAgent: {},
+      });
+    }
+  }, [usageSummary, setTokenUsage]);
 
   const usage = useMemo(() => {
     if (!overview) {
@@ -108,23 +119,43 @@ export function AppSidebar() {
     const name =
       (user.user_metadata?.full_name as string | undefined)?.trim() ||
       user.email ||
-      "Atlas Operator";
+      `${brandPrefix} Operator`;
     const email = user.email ?? "";
     return { name, email };
-  }, [user]);
+  }, [brandPrefix, user]);
   const navigate = useNavigate();
+  const navigation = useMemo(
+    () => [{ name: pilotName, href: "/", icon: MessageSquare }, ...baseNavigation],
+    [pilotName],
+  );
+
+  const logoOnly = !showSidebarText;
 
   return (
     <div className="flex h-screen w-64 flex-shrink-0 flex-col bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 items-center px-6">
-        <div className="flex items-center gap-2">
+        <div
+          className={cn(
+            "flex items-center gap-2",
+            logoOnly && "justify-center gap-0 w-full",
+          )}
+        >
           <img
-            src="/icon.png"
-            alt="Atlas Forge logo"
-            className="h-8 w-8 rounded-md object-cover shadow-sm"
+            src={brandLogo}
+            alt={`${engineName} logo`}
+            className={cn(
+              "rounded-md shadow-sm",
+              logoOnly
+                ? "h-10 max-h-10 w-auto max-w-[180px] object-contain"
+                : "h-8 w-8 object-cover",
+            )}
           />
-          <span className="text-xl font-semibold text-foreground">Atlas Forge</span>
+          {showSidebarText ? (
+            <span className="text-xl font-semibold text-foreground">{engineName}</span>
+          ) : (
+            <span className="sr-only">{engineName}</span>
+          )}
         </div>
       </div>
 

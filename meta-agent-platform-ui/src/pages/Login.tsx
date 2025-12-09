@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
+import { useBrandStore } from '@/store/brandStore';
 
 const ATLAS_LOGIN_URL = import.meta.env.VITE_ATLAS_LOGIN_URL || 'https://atlasos.app/login';
 
@@ -42,7 +43,7 @@ const normalizeRedirect = (value: string | null) => {
   }
 };
 
-export default function AtlasForgeLogin() {
+export default function AtlasEngineLogin() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -57,6 +58,10 @@ export default function AtlasForgeLogin() {
     metadataUrl?: string;
   } | null>(null);
   const [ssoChecking, setSsoChecking] = useState(false);
+  const brandPrefix = useBrandStore((state) => state.companyName?.trim() || 'Atlas');
+  const brandShort = useBrandStore((state) => state.shortName?.trim() || brandPrefix);
+  const engineName = `${brandPrefix} Engine`;
+  const brandLogo = useBrandStore((state) => state.logoUrl || state.sidebarLogoUrl || '/icon.png');
 
   const redirectParam = searchParams.get('redirect');
   const destination = useMemo(() => normalizeRedirect(safeDecode(redirectParam)), [redirectParam]);
@@ -113,10 +118,10 @@ export default function AtlasForgeLogin() {
     }
     setActiveAction('atlas');
     setErrorMessage(null);
-    setStatusMessage('Taking you to Atlas…');
+    setStatusMessage(`Taking you to ${brandShort}…`);
     const callback = encodeURIComponent(buildCallbackUrl());
     window.location.href = `${ATLAS_LOGIN_URL}?source=forge&redirect=${callback}`;
-  }, [buildCallbackUrl, ssoInfo?.enforceSso]);
+  }, [brandShort, buildCallbackUrl, ssoInfo?.enforceSso]);
 
   const handleSamlLogin = useCallback(async () => {
     if (!email || !email.includes('@')) {
@@ -146,13 +151,13 @@ export default function AtlasForgeLogin() {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center space-y-6">
       <div className="w-full max-w-md space-y-8">
-        {/* Atlas Logo and Branding */}
+        {/* Brand Logo and Branding */}
         <div className="text-center space-y-6">
           <div className="flex items-center justify-center gap-3">
-            <img src="/icon.png" alt="Atlas" className="h-12 w-auto" />
+            <img src={brandLogo} alt={engineName} className="h-12 w-auto rounded-lg bg-muted/30 p-1.5" />
             <div className="flex flex-col items-start">
-              <span className="text-2xl font-bold text-foreground">Atlas</span>
-              <span className="text-xs text-muted-foreground">By KaizenDev</span>
+              <span className="text-2xl font-bold text-foreground">{engineName}</span>
+              <span className="text-xs text-muted-foreground">Secure sign-in</span>
             </div>
           </div>
           </div>
@@ -165,7 +170,7 @@ export default function AtlasForgeLogin() {
             </Badge>
             <h1 className="text-3xl font-bold text-foreground">Choose how to sign in</h1>
             {/* <p className="text-muted-foreground">
-              We no longer redirect automatically—pick Atlas or SAML/Okta to continue.
+              We no longer redirect automatically—pick {brandShort} or SAML/Okta to continue.
             </p> */}
           </div>
         </div>
@@ -175,15 +180,15 @@ export default function AtlasForgeLogin() {
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
               <Shield className="h-6 w-6" />
             </div>
-            <CardTitle className="text-xl font-semibold">Atlas Forge Login</CardTitle>
+            <CardTitle className="text-xl font-semibold">{engineName} Login</CardTitle>
             <p className="text-sm text-muted-foreground">Select your authentication provider.</p>
           </CardHeader>
           <CardContent className="space-y-5">
             {!enforceSso ? (
               <div className="rounded-2xl border border-border/80 bg-card/70 p-4 space-y-3">
                 <div>
-                  <p className="font-semibold">Login with Atlas</p>
-                  <p className="text-sm text-muted-foreground">Use your Atlas credentials to continue.</p>
+                  <p className="font-semibold">Login with {brandShort}</p>
+                  <p className="text-sm text-muted-foreground">Use your {brandShort} credentials to continue.</p>
                 </div>
                 <Button className="w-full h-12" onClick={handleAtlasLogin} disabled={activeAction !== null}>
                   {activeAction === 'atlas' ? (
@@ -193,7 +198,7 @@ export default function AtlasForgeLogin() {
                     </>
                   ) : (
                     <>
-                      Sign In with Atlas
+                      Sign In with {brandShort}
                       <ArrowRight className="h-4 w-4" />
                     </>
                   )}

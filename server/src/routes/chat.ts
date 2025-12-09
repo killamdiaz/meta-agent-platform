@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { config } from '../config.js';
 import { pool } from '../db.js';
 import { approximateTokenCount, detectProvider, logUsage } from '../services/ModelRouterWrapper.js';
+import { MemoryService } from '../services/MemoryService.js';
 
 const router = express.Router();
 const client = new OpenAI({ apiKey: config.openAiApiKey });
@@ -188,6 +189,23 @@ router.post('/send', async (req, res) => {
       promptTokens,
       completionTokens,
       metadata: { conversationId: convId },
+    });
+
+    // Persist a conversational memory for Atlas Pilot so it shows up in the memory graph.
+    const trimmedUser = message.trim();
+    const assistantSnippet = assembled.trim();
+    const memorySummary =
+      assistantSnippet && assistantSnippet.length > 0
+        ? `Conversation summary: user said "${trimmedUser}". Assistant replied "${assistantSnippet.slice(0, 600)}".`
+        : `Conversation summary: user said "${trimmedUser}".`;
+    void MemoryService.addMemory('atlas-pilot', memorySummary, {
+      category: 'pilot_conversation',
+      importance: 'high',
+      persist: true,
+      conversationId: convId,
+      userId: userId ?? undefined,
+      orgId: orgId ?? undefined,
+      messageId
     });
 
     res.write(`event: done\ndata: {"messageId":"${messageId}","conversationId":"${convId}"}\n\n`);

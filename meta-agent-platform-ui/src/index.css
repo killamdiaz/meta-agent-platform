@@ -47,7 +47,7 @@ All colors MUST be HSL.
     --sidebar-border: 0 0% 18%;
     --sidebar-ring: 190 100% 50%;
 
-    /* Atlas Forge specific colors */
+    /* Atlas Engine specific colors */
     --atlas-glow: 190 100% 50%;
     --atlas-glow-dim: 190 80% 30%;
     --atlas-success: 142 76% 36%;

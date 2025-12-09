@@ -272,7 +272,11 @@ export function CreateAgentDrawer({
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetContent side="right" className="w-[520px] sm:w-[540px] overflow-y-auto">
+      <SheetContent
+        side="right"
+        className="w-[520px] sm:w-[540px] overflow-y-auto"
+        overlayProps={{ onClick: () => handleOpenChange(false) }}
+      >
         <SheetHeader className="space-y-2">
           <SheetTitle>Create a new agent</SheetTitle>
           <SheetDescription>

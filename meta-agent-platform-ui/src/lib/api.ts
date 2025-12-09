@@ -16,6 +16,20 @@ import type {
   WorkflowRecord,
   WorkflowRun,
 } from '@/types/api';
+export type BrandingPayload = {
+  companyName: string;
+  shortName: string;
+  logoData?: string | null;
+  sidebarLogoData?: string | null;
+  faviconData?: string | null;
+  loginLogoData?: string | null;
+  showSidebarText?: boolean;
+};
+
+export type BrandingResponse = BrandingPayload & {
+  id: string;
+  updatedAt: string;
+};
 
 export const API_BASE = (() => {
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -112,6 +126,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   listAgents(): Promise<{ items: AgentRecord[] }> {
     return request('/agents');
+  },
+
+  fetchBranding(): Promise<BrandingResponse> {
+    return request('/branding');
+  },
+
+  saveBranding(payload: BrandingPayload): Promise<BrandingResponse> {
+    return request('/branding', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
   },
 
   createAgent(payload: {
@@ -234,8 +259,9 @@ export const api = {
     return request('/insights/overview');
   },
 
-  fetchMemoryGraph(): Promise<GraphDataResponse> {
-    return request('/memory/graph');
+  fetchMemoryGraph(userId?: string): Promise<GraphDataResponse> {
+    const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    return request(`/memory/graph${qs}`);
   },
 
   runMultiAgentSession(prompt: string): Promise<MultiAgentSession> {

@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { AgentRecord } from "@/types/api";
 import { formatDistanceToNow } from "date-fns";
 import { useTokenStore } from "@/store/tokenStore";
+import { useBrandStore } from "@/store/brandStore";
 
 function formatPercent(part: number, total: number) {
   if (!total) return "0%";
@@ -46,6 +47,9 @@ export default function Overview() {
     select: (response) => response.items,
     refetchInterval: 30_000,
   });
+  const engineName = useBrandStore(
+    (state) => `${state.companyName?.trim() || "Atlas"} Engine`,
+  );
 
   const totalTokens = useTokenStore((state) => state.totalTokens);
   const tokensByAgent = useTokenStore((state) => state.tokensByAgent);
@@ -215,7 +219,7 @@ export default function Overview() {
           <div className="space-y-4">
             <div>
               <h3 className="text-lg font-semibold text-foreground">Automations</h3>
-              <p className="text-sm text-muted-foreground">Prompt-compiled workflows in Atlas Forge</p>
+              <p className="text-sm text-muted-foreground">Prompt-compiled workflows in {engineName}</p>
             </div>
             <div className="space-y-3">
               {workflowsLoading && !workflowsData && <Skeleton className="h-32 w-full" />}

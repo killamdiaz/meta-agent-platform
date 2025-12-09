@@ -31,6 +31,7 @@ import licenseRoute from './routes/license.js';
 import deploymentRoute from './routes/deployment.js';
 import samlRoute from './routes/saml.js';
 import workflowsRoute from './routes/workflows.js';
+import brandingRoute from './routes/branding.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,6 +83,7 @@ async function bootstrap() {
   app.use('/usage', usageRoute);
   app.use('/ingestion', ingestionRoute);
   app.use('/workflows', workflowsRoute);
+  app.use('/branding', brandingRoute);
 
   const publicDir = path.resolve(__dirname, 'public');
   if (existsSync(publicDir)) {

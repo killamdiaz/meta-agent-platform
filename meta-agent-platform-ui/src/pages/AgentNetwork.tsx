@@ -31,6 +31,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { useBrandStore } from "@/store/brandStore";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type SupabaseClientLike = {
   from: (table: string) => any;
@@ -610,6 +619,7 @@ const generatePosition = (index: number, total: number): { x: number; y: number 
 export default function AgentNetwork() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const brandPrefix = useBrandStore((state) => state.companyName?.trim() || "Atlas");
   const [showMinimap, setShowMinimap] = useState(false);
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -633,6 +643,11 @@ export default function AgentNetwork() {
   const [promptInput, setPromptInput] = useState("");
   const [isPromptSubmitting, setPromptSubmitting] = useState(false);
   const [promptStatus, setPromptStatus] = useState<string | null>(null);
+  const [clarifyOpen, setClarifyOpen] = useState(false);
+  const [clarifyQuestions, setClarifyQuestions] = useState<string[]>([]);
+  const [clarifyAnswers, setClarifyAnswers] = useState<Record<string, string>>({});
+  const [clarifyPlan, setClarifyPlan] = useState<WorkflowPlan | null>(null);
+  const suppressSelectionRef = useRef(false);
   const setSharedPipeline = useAutomationPipelineStore((state) => state.setPipeline);
   const clearSharedPipeline = useAutomationPipelineStore((state) => state.clear);
   const automationPipeline = useAutomationPipelineStore((state) => state.pipeline);
@@ -650,7 +665,12 @@ export default function AgentNetwork() {
     setLassoActive(false);
     setLassoRect(null);
     setLassoStart(null);
-  }, []);
+    // Also clear React Flow's internal selection state so clicking the canvas truly deselects nodes/edges.
+    if (reactFlowInstance) {
+      reactFlowInstance.setNodes((nodes) => nodes.map((node) => ({ ...node, selected: false })));
+      reactFlowInstance.setEdges((edges) => edges.map((edge) => ({ ...edge, selected: false })));
+    }
+  }, [reactFlowInstance]);
 
   const graphAgents = useAgentGraphStore((state) => state.agents);
   const graphLinks = useAgentGraphStore((state) => state.links);
@@ -768,11 +788,7 @@ export default function AgentNetwork() {
         } else {
           clearSharedPipeline();
         }
-        if (blueprint.metadata && typeof blueprint.metadata.selectedAgentId === "string") {
-          selectAgent(blueprint.metadata.selectedAgentId);
-        } else {
-          selectAgent(null);
-        }
+        selectAgent(null);
         const blueprintSignature = (() => {
           try {
             return JSON.stringify({
@@ -1908,6 +1924,29 @@ export default function AgentNetwork() {
     };
   }, [flushAutoSave]);
 
+  const handleBackgroundClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement;
+      if (
+        target.closest("[data-agent-drawer]") ||
+        target.closest(".react-flow__node") ||
+        target.closest(".react-flow__edge") ||
+        target.closest(".react-flow__handle") ||
+        target.closest(".react-flow__controls") ||
+        target.closest(".react-flow__minimap") ||
+        target.closest(".react-flow__panel") ||
+        target.closest(".react-flow__attribution")
+      ) {
+        return;
+      }
+      suppressSelectionRef.current = true;
+      setCreateOpen(false);
+      selectAgent(null);
+      clearSelection();
+    },
+    [clearSelection, selectAgent, setCreateOpen],
+  );
+
   const handleNewAutomation = useCallback(async () => {
     await flushAutoSave();
     const blankPipeline: AutomationPipeline = {
@@ -1921,7 +1960,7 @@ export default function AgentNetwork() {
       edges: [],
       metadata: {
         createdAt: new Date().toISOString(),
-        createdBy: "Atlas UI",
+        createdBy: `${brandPrefix} UI`,
       },
       pipeline: blankPipeline,
     };
@@ -2046,10 +2085,14 @@ export default function AgentNetwork() {
       );
       const nextSelected = new Set<string>();
       reactFlowInstance.getNodes().forEach((node) => {
-        if (node.type !== "agent" || !node.positionAbsolute) return;
+        if (!node.positionAbsolute) return;
+        const isAgentNode = node.type === "agent";
+        const isConditionNode = node.type === "condition";
+        if (!isAgentNode && !isConditionNode) return;
+
         const data = (node.data ?? {}) as { sourceId?: string };
         const sourceId = data.sourceId ?? (node.id.startsWith("pipeline:") ? node.id.replace(/^pipeline:/, "") : node.id);
-        if (sourceId && metaAgentIds.has(sourceId)) {
+        if (isAgentNode && sourceId && metaAgentIds.has(sourceId)) {
           return;
         }
         const width = node.width ?? 0;
@@ -2429,13 +2472,75 @@ export default function AgentNetwork() {
   );
 
   const onPaneClick = useCallback(() => {
+    suppressSelectionRef.current = true;
     clearSelection();
     selectAgent(null);
-  }, [clearSelection, selectAgent]);
+    setCreateOpen(false);
+  }, [clearSelection, selectAgent, setCreateOpen]);
 
   const onMove = useCallback(() => {
     setShowMinimap(true);
   }, []);
+
+  const handleSelectionChange = useCallback(
+    (params: { nodes: Node[] }) => {
+      if (suppressSelectionRef.current) {
+        suppressSelectionRef.current = false;
+        setSelectedAgents([]);
+        selectAgent(null);
+        return;
+      }
+      const selectedNodes = params.nodes ?? [];
+      const metaAgentIds = new Set(
+        agents.filter((agent) => isMetaControllerAgent(agent)).map((agent) => agent.id),
+      );
+      const nextSelected = selectedNodes
+        .filter((node) => {
+          if (node.type !== "agent" && node.type !== "condition") return false;
+          const data = (node.data ?? {}) as { sourceId?: string };
+          const sourceId =
+            data.sourceId ?? (node.id.startsWith("pipeline:") ? node.id.replace(/^pipeline:/, "") : node.id);
+          if (node.type === "agent" && sourceId && metaAgentIds.has(sourceId)) {
+            return false;
+          }
+          return true;
+        })
+        .map((node) => node.id);
+
+      // Avoid infinite update loops by short-circuiting when selection is unchanged.
+      if (
+        nextSelected.length === selectedAgents.length &&
+        nextSelected.every((id) => selectedAgents.includes(id))
+      ) {
+        return;
+      }
+
+      setSelectedAgents(nextSelected);
+
+      if (nextSelected.length === 1) {
+        const [singleId] = nextSelected;
+        let candidateAgentId: string | null = null;
+        if (singleId.startsWith("pipeline:")) {
+          const pipelineNodeId = singleId.replace(/^pipeline:/, "");
+          const pipelineNode = automationPipeline?.nodes.find((node) => node.id === pipelineNodeId);
+          const configAgentId = (pipelineNode?.config as { agentId?: string } | undefined)?.agentId ?? null;
+          if (configAgentId && !metaAgentIds.has(configAgentId)) {
+            candidateAgentId = configAgentId;
+          }
+        } else if (!metaAgentIds.has(singleId)) {
+          candidateAgentId = singleId;
+        }
+        if (candidateAgentId && agents.some((agent) => agent.id === candidateAgentId)) {
+          selectAgent(candidateAgentId);
+        } else {
+          selectAgent(null);
+        }
+      } else {
+        selectAgent(null);
+      }
+    },
+    [agents, automationPipeline, selectAgent, selectedAgents],
+  );
 
   const blueprintSummary = useMemo(() => {
     const totalAgents = agents.length;
@@ -2504,6 +2609,90 @@ export default function AgentNetwork() {
     [],
   );
 
+  const maybeHandleClarifications = useCallback(
+    (plan: WorkflowPlan): boolean => {
+      const questions = Array.from(
+        new Set(
+          plan.steps
+            .filter(
+              (step) =>
+                step.type === "node" &&
+                (step.node === "atlas.workflow.clarify" ||
+                  Array.isArray(step.inputs?.questions)),
+            )
+            .flatMap((step) => {
+              if (step.type !== "node") return [];
+              const q = step.inputs?.questions;
+              if (Array.isArray(q)) {
+                return q.map((entry) => String(entry));
+              }
+              return [];
+            })
+            .filter((q) => q && q.trim().length > 0),
+        ),
+      );
+
+      if (questions.length === 0) {
+        return false;
+      }
+
+      setClarifyPlan(plan);
+      setClarifyQuestions(questions);
+      setClarifyAnswers({});
+      setClarifyOpen(true);
+      setPromptStatus("Need a couple quick clarifications before generating.");
+      return true;
+    },
+    [],
+  );
+
+  const handleClarifySubmit = useCallback(async () => {
+    if (!clarifyPlan) {
+      setClarifyOpen(false);
+      return;
+    }
+    const mergedClarifications = { ...clarifyAnswers };
+    const filteredPlan: WorkflowPlan = {
+      ...clarifyPlan,
+      steps: clarifyPlan.steps
+        .filter((step) => !(step.type === "node" && step.node === "atlas.workflow.clarify"))
+        .map((step) =>
+          step.type === "node"
+            ? {
+                ...step,
+                inputs: {
+                  ...(step.inputs ?? {}),
+                  clarifications: mergedClarifications,
+                  exhaust_id:
+                    (step.inputs as Record<string, unknown> | undefined)?.exhaust_id ??
+                    mergedClarifications["Which exhaust source should I monitor?"],
+                },
+              }
+            : step,
+        ),
+      requiredNodes: (clarifyPlan.requiredNodes ?? []).filter((id) => id !== "atlas.workflow.clarify"),
+    };
+
+    const actions = planToActions(filteredPlan);
+    const summary = await applyInstructionActions(actions);
+    const interpretationMessage =
+      summary ??
+      `✅ Planned workflow "${filteredPlan.name || "New Workflow"}" with ${filteredPlan.steps.length} steps.`;
+    setPromptStatus(interpretationMessage);
+    setPromptInput("");
+    toast({
+      title: interpretationMessage.startsWith("✅")
+        ? interpretationMessage
+        : `✅ ${interpretationMessage}`,
+      description: summary && summary !== interpretationMessage ? summary : undefined,
+    });
+
+    setClarifyOpen(false);
+    setClarifyPlan(null);
+    setClarifyQuestions([]);
+    setClarifyAnswers({});
+  }, [applyInstructionActions, clarifyPlan, planToActions, toast]);
+
   const handleAutomationPromptSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -2562,6 +2751,9 @@ export default function AgentNetwork() {
         }
 
         const plan = await api.compileWorkflow(text);
+        if (maybeHandleClarifications(plan)) {
+          return;
+        }
         const actions = planToActions(plan);
         if (!actions.length) {
           throw new Error("Workflow compiler returned no steps.");
@@ -2598,14 +2790,14 @@ export default function AgentNetwork() {
     [
       applyInstructionActions,
       isPromptSubmitting,
+      maybeHandleClarifications,
       planToActions,
       promptInput,
       toast,
     ],
   );
-
   return (
-    <div className="h-screen w-full flex bg-[#0b0b0f]">
+    <div className="h-screen w-full flex bg-[#0b0b0f]" onMouseDownCapture={handleBackgroundClick}>
       <div
         ref={flowWrapperRef}
         className="flex-1 relative"
@@ -2614,6 +2806,7 @@ export default function AgentNetwork() {
         onMouseUp={handleWrapperMouseUp}
         onMouseLeave={handleWrapperMouseLeave}
       >
+
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -2621,6 +2814,7 @@ export default function AgentNetwork() {
           onNodeDragStop={onNodeDragStop}
           onPaneClick={onPaneClick}
           onMove={onMove}
+          onSelectionChange={handleSelectionChange}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.35, includeHiddenNodes: true }}
@@ -2637,6 +2831,7 @@ export default function AgentNetwork() {
           }}
           panOnDrag={!lassoEnabled}
           selectionOnDrag={lassoEnabled}
+          
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -2700,9 +2895,16 @@ export default function AgentNetwork() {
         )}
 
         <Card className="absolute left-1/2 top-6 z-30 w-[420px] -translate-x-1/2 bg-black/40 backdrop-blur border border-white/10 shadow-lg">
-          <button
-            type="button"
+          <div
+            role="button"
+            tabIndex={0}
             onClick={() => setAutomationOpen((prev) => !prev)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setAutomationOpen((prev) => !prev);
+              }
+            }}
             className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-white/5"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
@@ -2710,7 +2912,9 @@ export default function AgentNetwork() {
             </div>
             <div className="flex-1 space-y-2">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-semibold uppercase tracking-[0.28em] text-white/60">Automation</Label>
+                <span className="text-xs font-semibold uppercase tracking-[0.28em] text-white/60">
+                  Automation
+                </span>
                 <div className="flex items-center gap-3">
                   <span className="flex items-center gap-1 text-xs font-semibold text-white/80">
                     <span
@@ -2736,7 +2940,8 @@ export default function AgentNetwork() {
                       event.currentTarget.blur();
                     }
                   }}
-                  placeholder="Atlas launch playbook"
+                  placeholder={`${brandPrefix} launch playbook`}
+                  aria-label="Automation name"
                   className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
                 />
               ) : (
@@ -2755,7 +2960,7 @@ export default function AgentNetwork() {
                 automationOpen ? "rotate-180" : "rotate-0"
               )}
             />
-          </button>
+          </div>
           {automationOpen && (
             <div className="space-y-4 border-t border-white/10 px-5 py-4">
               {automationError ? (
@@ -2764,7 +2969,7 @@ export default function AgentNetwork() {
                 </div>
               ) : null}
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Load existing</Label>
+                <span className="text-xs uppercase tracking-[0.3em] text-white/50">Load existing</span>
                 <Select
                   value={selectedAutomationId}
                   onValueChange={handleSelectAutomation}
@@ -2786,25 +2991,29 @@ export default function AgentNetwork() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Name</Label>
+                <span className="text-xs uppercase tracking-[0.3em] text-white/50">Name</span>
                 <Input
                   value={automationName}
                   onChange={(event) => setAutomationName(event.target.value)}
-                  placeholder="Atlas launch playbook"
+                  placeholder={`${brandPrefix} launch playbook`}
+                  aria-label="Automation name"
                   className="border-white/10 bg-white/5 text-white placeholder:text-white/40"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Description</Label>
+                <span className="text-xs uppercase tracking-[0.3em] text-white/50">Description</span>
                 <Textarea
                   value={automationDescription}
                   onChange={(event) => setAutomationDescription(event.target.value)}
                   placeholder="High-level goal or context for this automation"
+                  aria-label="Automation description"
                   className="min-h-[72px] border-white/10 bg-white/5 text-white placeholder:text-white/40"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-[0.3em] text-white/50">Blueprint Snapshot</Label>
+                <span className="text-xs uppercase tracking-[0.3em] text-white/50">
+                  Blueprint Snapshot
+                </span>
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-xs text-white/80 space-y-2">
                   <div className="flex items-center justify-between">
                     <span>Agents mapped</span>
@@ -2881,11 +3090,17 @@ export default function AgentNetwork() {
             className="pointer-events-auto flex w-full min-w-[320px] max-w-[680px] flex-col items-center gap-2"
           >
             <div className="flex w-full items-center gap-3 rounded-full border border-white/20 bg-black/60 px-4 py-2.5 text-sm text-white/80 backdrop-blur-lg shadow-lg">
+              <label htmlFor="automation-prompt" className="sr-only">
+                Automation prompt
+              </label>
               <input
+                id="automation-prompt"
+                name="automation-prompt"
                 value={promptInput}
                 onChange={(event) => setPromptInput(event.target.value)}
                 className="flex-1 bg-transparent text-sm text-white placeholder:text-white/40 focus:outline-none"
                 placeholder="Type in a change you’d like to see…"
+                aria-label="Automation prompt"
                 disabled={isPromptSubmitting}
               />
               <Button
@@ -2904,29 +3119,24 @@ export default function AgentNetwork() {
         </div>
       </div>
 
-      <div
-        className={cn(
-          "relative flex-shrink-0 overflow-hidden transition-all duration-500 ease-out",
-          selectedAgent ? "w-[400px] max-w-[400px]" : "w-0 max-w-0 pointer-events-none"
-        )}
-      >
-        <div
-          className={cn(
-            "h-full transform transition-transform duration-500 ease-out",
-            selectedAgent ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"
-          )}
-        >
-          {selectedAgent && (
-            <ConfigPanel
-              agent={selectedAgent}
-              onDelete={(id) => deleteAgentMutation.mutateAsync(id)}
-              onUpdate={(id, updates) => updateAgentMutation.mutateAsync({ id, updates })}
-              isDeleting={deleteAgentMutation.isPending}
-              isSaving={updateAgentMutation.isPending}
-            />
-          )}
-        </div>
-      </div>
+<div
+  className={cn(
+    "fixed top-0 right-0 h-full w-[400px] max-w-[400px] border-l border-border/40 bg-background/60 backdrop-blur transition-transform duration-500 ease-out z-50",
+    selectedAgent ? "translate-x-0" : "translate-x-full"
+  )}
+  data-agent-drawer
+  style={{ willChange: "transform" }}
+>
+  {selectedAgent && (
+    <ConfigPanel
+      agent={selectedAgent}
+      onDelete={(id) => deleteAgentMutation.mutateAsync(id)}
+      onUpdate={(id, updates) => updateAgentMutation.mutateAsync({ id, updates })}
+      isDeleting={deleteAgentMutation.isPending}
+      isSaving={updateAgentMutation.isPending}
+    />
+  )}
+</div>
 
       <CreateAgentDrawer
         open={isCreateOpen}
@@ -2941,6 +3151,44 @@ export default function AgentNetwork() {
           return result;
         }}
       />
+
+      <Dialog open={clarifyOpen} onOpenChange={setClarifyOpen}>
+        <DialogContent className="max-w-xl w-[92vw] rounded-3xl border border-white/10 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold text-white">One more thing</DialogTitle>
+            <DialogDescription className="text-sm text-white/70">
+              A couple of quick details before I generate your workflow.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            {clarifyQuestions.map((question) => (
+              <div
+                key={question}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+              >
+                <div className="text-sm text-white/80 mb-2">{question}</div>
+                <Input
+                  value={clarifyAnswers[question] ?? ""}
+                  onChange={(event) =>
+                    setClarifyAnswers((prev) => ({ ...prev, [question]: event.target.value }))
+                  }
+                  placeholder="Type your answer"
+                  aria-label={question}
+                  className="bg-white/5 border-white/10 text-white placeholder:text-white/40"
+                />
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setClarifyOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleClarifySubmit} className="bg-primary text-primary-foreground hover:bg-primary/90">
+              Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
