@@ -203,4 +203,11 @@ searchIssues(params: { jql?: string; query?: string; status?: string; assignee?:
       data: { transition: { id: transitionId }, fields }
     });
   }
+
+  getTransitions(issueKey: string) {
+    return this.request<{ transitions: { id: string; name: string }[] }>({
+      url: `/rest/api/3/issue/${issueKey}/transitions`,
+      method: 'GET'
+    });
+  }
 }

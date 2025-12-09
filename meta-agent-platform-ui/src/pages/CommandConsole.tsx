@@ -352,7 +352,57 @@ export default function CommandConsole() {
       },
     };
     let patchError: unknown = null;
-    try {
+    let resolvedInJira = false;
+
+    const fetchTransitions = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}/transitions`, {
+          method: "GET",
+          headers: { ...headers },
+          credentials: "include",
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || res.statusText);
+        }
+        const data = (await res.json()) as { transitions?: { id: string; name: string }[] };
+        return data.transitions ?? [];
+      } catch (err) {
+        console.warn("[console] failed to fetch transitions, will fallback", err);
+        return [];
+      }
+    };
+
+    const chooseTransitionId = (transitions: { id: string; name: string }[]) => {
+      const targetNames = ["done", "resolved", "close"];
+      const match = transitions.find((t) => targetNames.some((n) => t.name.toLowerCase().includes(n)));
+      return match?.id ?? transitions[0]?.id;
+    };
+
+    const tryTransition = async () => {
+      try {
+        const localTransitions = issue?.transitions ?? [];
+        const transitions = localTransitions.length ? localTransitions : await fetchTransitions();
+        const transitionId = chooseTransitionId(transitions);
+        if (!transitionId) return false;
+        const res = await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}/transition`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          credentials: "include",
+          body: JSON.stringify({ transitionId }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || res.statusText);
+        }
+        return true;
+      } catch (err) {
+        patchError = err;
+        return false;
+      }
+    };
+
+    const tryPatch = async () => {
       const patchRes = await fetch(`${API_BASE}/connectors/jira/api/issues/${ticket.key}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...headers },
@@ -360,7 +410,6 @@ export default function CommandConsole() {
         body: JSON.stringify({
           fields: {
             resolution: { name: "Done" },
-            status: { name: "Done" },
           },
         }),
       });
@@ -368,9 +417,30 @@ export default function CommandConsole() {
         const text = await patchRes.text();
         throw new Error(text || patchRes.statusText);
       }
-    } catch (err) {
-      patchError = err;
-      console.warn("[console] jira resolve failed, continuing to ingest", err);
+      return true;
+    };
+
+    const transitioned = await tryTransition();
+    if (transitioned) {
+      resolvedInJira = true;
+    } else {
+      try {
+        resolvedInJira = await tryPatch();
+      } catch (err) {
+        patchError = err;
+        console.warn("[console] jira resolve failed, continuing to ingest", err);
+      }
+    }
+
+    if (!resolvedInJira) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Could not resolve ${ticket.key} in Jira (${(patchError as Error)?.message ?? "unknown error"}). No ingestion was performed. Try again after checking Jira status.`,
+        },
+      ]);
+      return;
     }
 
     try {
@@ -393,10 +463,7 @@ export default function CommandConsole() {
       ...prev,
       {
         role: "assistant",
-        content:
-          patchError == null
-            ? `Ticket ${ticket.key} resolved in Jira and ingested into the KB for the memory graph. Pick your next ticket from the list to continue.`
-            : `Ticket ${ticket.key} ingested and marked closed locally. Jira resolve may have failed (${(patchError as Error)?.message ?? "unknown error"}). Pick your next ticket to continue.`,
+        content: `Ticket ${ticket.key} resolved in Jira and ingested into the KB for the memory graph. Pick your next ticket from the list to continue.`,
       },
     ]);
     setToast(`Ticket ${ticket.key} resolved`);

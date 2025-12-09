@@ -431,7 +431,7 @@ router.post('/issues/:key/transition', async (req, res) => {
     const forgeUserId = resolveAccountId(req);
     if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
     const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
-    const client = await JiraClient.fromTokens(tokens);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
     const transitionId = req.body?.transitionId;
     const fields = req.body?.fields;
     if (!transitionId) {
@@ -444,6 +444,20 @@ router.post('/issues/:key/transition', async (req, res) => {
     res.json({ status: 'transitioned' });
   } catch (error: any) {
     res.status(500).json({ message: error?.message ?? 'Failed to transition issue' });
+  }
+});
+
+router.get('/issues/:key/transitions', async (req, res) => {
+  try {
+    const orgId = resolveOrgId(req);
+    const forgeUserId = resolveAccountId(req);
+    if (!orgId || !forgeUserId) return res.status(400).json({ message: 'org_id and forge_user_id required' });
+    const tokens = await fetchUserJiraTokens(orgId, forgeUserId);
+    const client = await JiraClient.fromTokens(tokens, orgId, forgeUserId);
+    const transitions = await client.getTransitions(req.params.key);
+    res.json(transitions);
+  } catch (error: any) {
+    res.status(500).json({ message: error?.message ?? 'Failed to fetch transitions' });
   }
 });
 
