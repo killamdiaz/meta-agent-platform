@@ -1652,20 +1652,28 @@ export default function AgentNetwork() {
         })
         .filter((node): node is Node => node !== null) ?? [];
 
-    const agentNodes = agents.map((agent, index) => ({
-      id: agent.id,
-      type: "agent" as const,
-      position: positions[agent.id] ?? generatePosition(index, agents.length),
-      data: {
-        name: agent.name,
-        status: agent.status,
-        role: agent.role,
-        isTalking: graphAgents[agent.id]?.isTalking ?? false,
-        isVirtual: false,
-        sourceId: agent.id,
-      },
-      selected: selectedAgentId === agent.id || selectedAgentsSet.has(agent.id),
-    }));
+    const pipelineSourceIds = new Set(
+      pipelineNodes
+        .map((node) => (node.data as { sourceId?: string } | undefined)?.sourceId)
+        .filter((id): id is string => Boolean(id)),
+    );
+
+    const agentNodes = agents
+      .filter((agent) => !pipelineSourceIds.has(agent.id))
+      .map((agent, index) => ({
+        id: agent.id,
+        type: "agent" as const,
+        position: positions[agent.id] ?? generatePosition(index, agents.length),
+        data: {
+          name: agent.name,
+          status: agent.status,
+          role: agent.role,
+          isTalking: graphAgents[agent.id]?.isTalking ?? false,
+          isVirtual: false,
+          sourceId: agent.id,
+        },
+        selected: selectedAgentId === agent.id || selectedAgentsSet.has(agent.id),
+      }));
 
     return [...pipelineNodes, ...agentNodes];
   }, [agents, automationPipeline, graphAgents, positions, selectedAgentId, selectedAgentsSet]);

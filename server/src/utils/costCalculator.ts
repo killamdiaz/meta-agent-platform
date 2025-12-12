@@ -3,9 +3,11 @@ type Pricing = {
   output: number; // per 1K tokens
 };
 
+// Pricing expressed per 1K tokens. Updated to reflect $70 per million tokens (~$0.07 per 1K)
+// as a flat rate across supported models.
 const OPENAI_PRICING: Record<string, Pricing> = {
-  'gpt-4o': { input: 0.005, output: 0.015 },
-  'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
+  'gpt-4o': { input: 0.07, output: 0.07 },
+  'gpt-4o-mini': { input: 0.07, output: 0.07 },
 };
 
 function resolvePricing(model: string): Pricing | null {

@@ -394,6 +394,61 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_workflow_states_run ON workflow_states(workflow_run_id);
 
+    CREATE TABLE IF NOT EXISTS atlas_connectors (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      description TEXT,
+      icon TEXT,
+      publisher TEXT NOT NULL,
+      category TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      verified BOOLEAN NOT NULL DEFAULT FALSE,
+      download_count INT NOT NULL DEFAULT 0,
+      storage_path TEXT NOT NULL,
+      manifest JSONB NOT NULL,
+      actions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      triggers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      transforms JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(tenant_id, name, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_atlas_connectors_status ON atlas_connectors(status);
+    CREATE INDEX IF NOT EXISTS idx_atlas_connectors_tenant ON atlas_connectors(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS atlas_connector_versions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      connector_id UUID NOT NULL REFERENCES atlas_connectors(id) ON DELETE CASCADE,
+      version TEXT NOT NULL,
+      status TEXT NOT NULL,
+      manifest JSONB NOT NULL,
+      actions JSONB NOT NULL,
+      triggers JSONB NOT NULL,
+      transforms JSONB NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(connector_id, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_connector_secrets (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      tenant_id TEXT NOT NULL,
+      connector_id UUID NOT NULL REFERENCES atlas_connectors(id) ON DELETE CASCADE,
+      secret_key TEXT NOT NULL,
+      iv BYTEA NOT NULL,
+      auth_tag BYTEA NOT NULL,
+      salt BYTEA NOT NULL,
+      encrypted_value BYTEA NOT NULL,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(tenant_id, connector_id, secret_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_atlas_secrets_connector ON atlas_connector_secrets(connector_id);
+    CREATE INDEX IF NOT EXISTS idx_atlas_secrets_tenant ON atlas_connector_secrets(tenant_id);
+
     CREATE TABLE IF NOT EXISTS branding (
       id UUID PRIMARY KEY,
       company_name TEXT NOT NULL,

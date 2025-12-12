@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { type ExhaustStream } from "@/data/mockExhausts";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { useBrandStore } from "@/store/brandStore";
+import { useSidebarModeStore } from "@/store/sidebarMode";
 
 type Message = {
   role: "user" | "assistant";
@@ -120,6 +121,10 @@ export default function CommandConsole() {
   const [ticketView, setTicketView] = useState<"pending" | "resolved">("pending");
   const [toast, setToast] = useState<string | null>(null);
   const ticketCacheKey = user?.id ? `atlas-tickets-${user.id}` : null;
+  const setHistoryMode = useSidebarModeStore((state) => state.setHistoryMode);
+  const historyMode = useSidebarModeStore((state) => state.historyMode);
+  const conversationToLoad = useSidebarModeStore((state) => state.conversationToLoad);
+  const clearConversationRequest = useSidebarModeStore((state) => state.clearConversationRequest);
   const friendlyName = (() => {
     const metadata = (user as SupabaseUser | null)?.user_metadata ?? {};
     const first =
@@ -641,6 +646,7 @@ export default function CommandConsole() {
 
   const handleSend = async () => {
     if (!input.trim()) return;
+    setHistoryMode(false);
 
     const yesIntent =
       /\b(yes|yeah|yep|sure|ok|okay|start|begin|let's go|solve it|solve this|open it|proceed|do it)\b/i.test(input) ||
@@ -1139,6 +1145,24 @@ When generating the diagnosis, ALWAYS check if any of the above incidents share 
   }, [conversationId]);
 
   useEffect(() => {
+    if (!conversationToLoad) return;
+    const stored = localStorage.getItem(`atlas-chat-${conversationToLoad}`);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setMessages(parsed);
+          setConversationId(conversationToLoad);
+          setShowTicketView(true);
+        }
+      } catch {
+        /* ignore bad history */
+      }
+    }
+    clearConversationRequest();
+  }, [clearConversationRequest, conversationToLoad]);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -1326,7 +1350,21 @@ When generating the diagnosis, ALWAYS check if any of the above incidents share 
   if (showTicketView) {
     return (
       <>
-        <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto relative">
+        <div className="flex h-screen gap-4 p-4 max-w-7xl mx-auto relative" onClick={() => setHistoryMode(false)}>
+          <button
+            className="absolute left-4 top-10 text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="Toggle conversation history"
+            onClick={(e) => {
+              e.stopPropagation();
+              setHistoryMode(!historyMode);
+            }}
+          >
+            <div className="flex flex-col items-center justify-center h-full gap-1">
+              <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+              <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+              <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+            </div>
+          </button>
           <div className="flex-[3] flex flex-col bg-card/30 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
             {toast && (
               <div className="absolute top-6 right-6 z-50">
@@ -1413,7 +1451,21 @@ When generating the diagnosis, ALWAYS check if any of the above incidents share 
 
   return (
     <>
-      <div className="flex flex-col h-screen">
+      <div className="flex flex-col h-screen relative" onClick={() => setHistoryMode(false)}>
+        <button
+          className="absolute left-4 top-6 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Toggle conversation history"
+          onClick={(e) => {
+            e.stopPropagation();
+            setHistoryMode(!historyMode);
+          }}
+        >
+          <div className="flex flex-col items-center justify-center h-full gap-1">
+            <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+            <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+            <span className="block h-0.5 w-6 bg-foreground/80 rounded" />
+          </div>
+        </button>
         <div className="flex-1 overflow-y-auto p-8" ref={scrollRef}>
           {messages.length === 0 ? renderWelcome() : renderMessages()}
         </div>

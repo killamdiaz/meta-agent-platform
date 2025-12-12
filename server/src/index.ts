@@ -21,10 +21,11 @@ import { toolRuntime } from './multiAgent/ToolRuntime.js';
 import agentConfigRoute from './routes/agentConfig.js';
 import automationBuilderRoute from './routes/automationBuilder.js';
 import connectorsRoute from './routes/connectors.js';
+import aiRoute from './routes/ai.js';
+import marketplaceRoute from './routes/marketplace.js';
 import usageRoute from './routes/usage.js';
 import ingestionRoute from './routes/ingestion.js';
 import { startIngestionWorker } from './services/IngestionWorker.js';
-import { buildJiraApiRouter } from './connectors/jira/api/index.js';
 import { errorCounter, metricsHandler, requestCounter } from './metrics.js';
 import { validateLicense } from './middleware/license.js';
 import licenseRoute from './routes/license.js';
@@ -78,8 +79,8 @@ async function bootstrap() {
   app.use('/automations', automationsRoute);
   app.use('/automation-builder', automationBuilderRoute);
   app.use('/connectors', connectorsRoute);
-  // Alias for Jira OAuth callback when redirect URI is set to /oauth/jira/callback
-  app.use('/oauth/jira', buildJiraApiRouter());
+  app.use('/ai', aiRoute);
+  app.use('/marketplace', marketplaceRoute);
   app.use('/usage', usageRoute);
   app.use('/ingestion', ingestionRoute);
   app.use('/workflows', workflowsRoute);

@@ -28,7 +28,7 @@ function formatCurrency(value: number) {
 }
 
 const COST_PRICING = {
-  aiTokensPerMillion: 30,
+  aiTokensPerMillion: 70,
   embeddingTokensPerMillion: 2,
   vectorStoragePerGb: 3,
   imageGen512: 0.05,

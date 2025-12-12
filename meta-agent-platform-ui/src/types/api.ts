@@ -198,6 +198,46 @@ export interface MemoryEntry {
   expires_at: string | null;
 }
 
+export interface AtlasConnectorManifest {
+  name: string;
+  version: string;
+  description: string;
+  icon?: string;
+  publisher: string;
+  category: string;
+  auth: {
+    type: 'oauth2' | 'api_key' | 'basic';
+    config?: Record<string, unknown>;
+  };
+}
+
+export interface AtlasConnectorRecord {
+  id: string;
+  tenantId: string;
+  manifest: AtlasConnectorManifest;
+  actions: Record<string, any>;
+  triggers: Record<string, any>;
+  transforms: Record<string, string>;
+  status: 'draft' | 'installed' | 'published';
+  verified: boolean;
+  downloadCount: number;
+  storagePath?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MarketplaceConnectorRecord {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  icon?: string;
+  publisher: string;
+  category: string;
+  verified: boolean;
+  downloadCount: number;
+}
+
 export type WorkflowTriggerType = 'manual' | 'time' | 'event' | 'log';
 
 export interface WorkflowTrigger {

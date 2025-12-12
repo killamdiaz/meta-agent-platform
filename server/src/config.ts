@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'path';
 
 export const config = {
   port: Number(process.env.PORT || 4000),
@@ -44,5 +45,8 @@ export const config = {
   samlSpCertificate: process.env.SAML_SP_CERTIFICATE || process.env.SAML_SP_CERT || '',
   samlJwtSecret: process.env.SAML_JWT_SECRET || 'dev-saml-jwt',
   samlJwtExpiryHours: Number(process.env.SAML_JWT_EXPIRY_HOURS || 12),
-  samlDefaultRedirect: process.env.SAML_DEFAULT_REDIRECT || ''
+  samlDefaultRedirect: process.env.SAML_DEFAULT_REDIRECT || '',
+  connectorRegistryPath: process.env.CONNECTOR_REGISTRY_PATH || path.resolve(process.cwd(), 'registry', 'connectors'),
+  connectorVaultPepper: process.env.CONNECTOR_VAULT_PEPPER || 'atlas-connector-pepper',
+  connectorRuntimeTimeoutMs: Number(process.env.CONNECTOR_RUNTIME_TIMEOUT_MS || 15000),
 };

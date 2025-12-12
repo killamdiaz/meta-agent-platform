@@ -59,7 +59,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 OPENAI_API_KEY=sk-...
 COORDINATOR_INTERVAL_MS=10000
 LICENSE_SECRET=dev-license-secret
-ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://f3ef4cbdb156.ngrok-free.app
 ```
 
 ### SAML (Service Provider)

@@ -16,6 +16,9 @@ import Integrations from "./pages/Integrations";
 import Exhausts from "./pages/Exhausts";
 import DataSources from "./pages/DataSources";
 import Billing from "./pages/Billing";
+import Marketplace from "./pages/Marketplace";
+import MyConnectors from "./pages/MyConnectors";
+import ConnectorBuilder from "./pages/ConnectorBuilder";
 import Help from "./pages/Help";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
@@ -63,11 +66,14 @@ const AppRoutes = () => {
         <Route path="/multi-agent" element={<MultiAgentConsole />} />
         <Route path="/console" element={<CommandConsole />} />
         <Route path="/multi-agent/runtime" element={<ToolAgentConsole />} />
-            <Route path="/exhausts" element={<Exhausts />} />
-            <Route path="/exhausts/:streamId" element={<Exhausts />} />
+        <Route path="/exhausts" element={<Exhausts />} />
+        <Route path="/exhausts/:streamId" element={<Exhausts />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/billing" element={<Billing />} />
         <Route path="/integrations" element={<Integrations />} />
+        <Route path="/marketplace" element={<Marketplace />} />
+        <Route path="/my-connectors" element={<MyConnectors />} />
+        <Route path="/builder/:id" element={<ConnectorBuilder />} />
         <Route path="/data-sources" element={<DataSources />} />
         <Route path="/help" element={<Help />} />
       </Route>

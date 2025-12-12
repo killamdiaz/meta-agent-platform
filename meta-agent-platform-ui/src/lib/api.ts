@@ -562,6 +562,25 @@ export const api = {
   fetchSamlSession() {
     return request<{ user: any; token: string }>('/auth/saml/session');
   },
+
+  listMarketplaceConnectors() {
+    return request<import("../types/api").MarketplaceConnectorRecord[]>('/marketplace');
+  },
+
+  listInstalledConnectors() {
+    return request<import("../types/api").AtlasConnectorRecord[]>('/connectors/installed');
+  },
+
+  listDraftConnectors() {
+    return request<import("../types/api").AtlasConnectorRecord[]>('/connectors/drafts');
+  },
+
+  installConnector(connectorId: string) {
+    return request<import("../types/api").AtlasConnectorRecord>('/connectors/install', {
+      method: 'POST',
+      body: JSON.stringify({ connectorId }),
+    });
+  },
 };
 
 export type ApiClient = typeof api;
