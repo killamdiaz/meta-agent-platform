@@ -1,0 +1,11 @@
+{
+  "name": "atlas-monorepo",
+  "private": true,
+  "version": "0.0.1",
+  "workspaces": [
+    "atlas/engine/server",
+    "atlas/engine/meta-agent-platform-ui",
+    "atlas/memory",
+    "atlas/packages/*"
+  ]
+}

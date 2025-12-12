@@ -1,0 +1,5 @@
+packages:
+  - atlas/engine/server
+  - atlas/engine/meta-agent-platform-ui
+  - atlas/memory
+  - atlas/packages/*

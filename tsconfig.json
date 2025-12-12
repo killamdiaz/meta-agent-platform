@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@atlas/memory-core": ["atlas/packages/atlas-memory-core/dist/index.d.ts"],
+      "@atlas/memory-core/*": ["atlas/packages/atlas-memory-core/dist/*"],
+      "@atlas/shared-utils": ["atlas/packages/shared-utils/dist/index.d.ts"],
+      "@atlas/shared-utils/*": ["atlas/packages/shared-utils/dist/*"],
+      "@atlas/types": ["atlas/packages/types/dist/index.d.ts"],
+      "@atlas/types/*": ["atlas/packages/types/dist/*"]
+    }
+  }
+}

@@ -1,0 +1,288 @@
+version: "3.9"
+
+services:
+  db:
+    image: ankane/pgvector:latest
+
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ../../../data/db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "service=db"
+      - "component=database"
+
+  server:
+    build:
+      context: ../../..
+      dockerfile: atlas/engine/server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      COORDINATOR_INTERVAL_MS: ${COORDINATOR_INTERVAL_MS:-10000}
+    ports:
+      - "4000:4000"
+    labels:
+      - "service=server"
+      - "component=api"
+
+  frontend:
+    build: ../../engine/meta-agent-platform-ui
+    command: npm run dev -- --host 0.0.0.0 --port 8080
+    depends_on:
+      - server
+    env_file:
+      - .env
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - BROWSER=none
+      - VITE_API_BASE=http://server:4000
+      - VITE_API_BASE_URL=http://server:4000
+      - VITE_EXHAUST_BASE_URL=http://exhaust:4100
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+      - VITE_ATLAS_LOGIN_URL=${VITE_ATLAS_LOGIN_URL}
+      - VITE_SUPABASE_SAML_PROVIDER_ID=${VITE_SUPABASE_SAML_PROVIDER_ID}
+      - VITE_SUPABASE_SSO_DOMAIN=${VITE_SUPABASE_SSO_DOMAIN}
+    volumes:
+      - ../../engine/meta-agent-platform-ui:/app
+      - /app/node_modules
+    ports:
+      - "3000:8080"
+    labels:
+      - "service=frontend"
+      - "component=ui"
+
+  forge:
+    build: ../../../forge
+    depends_on:
+      - server
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      NEXT_PUBLIC_META_AGENT_ID: ${NEXT_PUBLIC_META_AGENT_ID:-forge}
+      META_AGENT_SECRET: ${META_AGENT_SECRET}
+      NEXT_PUBLIC_ATLAS_LOGIN_URL: ${NEXT_PUBLIC_ATLAS_LOGIN_URL}
+    ports:
+      - "3100:3000"
+    labels:
+      - "service=forge"
+      - "component=frontend"
+
+  nginx:
+    image: nginx:alpine
+    depends_on:
+      - frontend
+      - server
+      - exhaust
+    volumes:
+      - ../k8s/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+    labels:
+      - "service=nginx"
+      - "component=edge"
+
+  slack-bot:
+    build:
+      context: ../../../Slack-Enterprise-Bot
+      dockerfile: ./api/Dockerfile
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+    command: uvicorn api.main:api --host 0.0.0.0 --port 8000
+    environment:
+      - REDIS_HOST=redis
+    ports:
+      - "8000:8000"
+    labels:
+      - "service=slack-bot"
+      - "component=bot"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "service=redis"
+      - "component=cache"
+
+  ingestor:
+    build:
+      context: ../../../ingestion-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      browser:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CRAWL_ADDITIONAL_PATHS=${CRAWL_ADDITIONAL_PATHS}
+      - CRAWL_MAX_PAGES=${CRAWL_MAX_PAGES}
+      - INGESTION_POLL_MS=5000
+    labels:
+      - "service=ingestor"
+      - "component=ingestion"
+
+  exhaust:
+    build: ../../../exhaust-lss-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - EXHAUST_PORT=4100
+      - EXHAUST_PUBLIC_URL=${EXHAUST_PUBLIC_URL:-http://localhost:4100}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "4100:4100"
+    labels:
+      - "service=exhaust"
+      - "component=logs"
+
+  browser:
+    image: browserless/chrome:latest
+    restart: unless-stopped
+    environment:
+      - MAX_CONCURRENT_SESSIONS=5
+      - PREBOOT_CHROME=true
+      - DEFAULT_BLOCK_ADS=true
+    ports:
+      - "3030:3000"
+      - "9222:9222"
+    labels:
+      - "service=browser"
+      - "component=browserless"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    labels:
+      - "service=cadvisor"
+      - "component=monitoring"
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - cadvisor
+    labels:
+      - "service=prometheus"
+      - "component=monitoring"
+
+  loki:
+    image: grafana/loki:2.9.3
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ./data/loki:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3101:3100"
+    labels:
+      - "service=loki"
+      - "component=monitoring"
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    restart: unless-stopped
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    labels:
+      - "service=promtail"
+      - "component=monitoring"
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+    labels:
+      - "service=grafana"
+      - "component=monitoring"
+
+  metabase:
+    image: metabase/metabase:latest
+    restart: unless-stopped
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=${POSTGRES_DB:-postgres}
+      - MB_DB_PORT=5432
+      - MB_DB_USER=${POSTGRES_USER:-postgres}
+      - MB_DB_PASS=${POSTGRES_PASSWORD:-postgres}
+      - MB_DB_HOST=db
+      - MB_SITE_URL=${METABASE_SITE_URL:-http://localhost:3002}
+      - MB_SETUP_ADMIN_EMAIL=${METABASE_ADMIN_EMAIL:-admin@example.com}
+      - MB_SETUP_ADMIN_PASSWORD=${METABASE_ADMIN_PASSWORD:-admin}
+      - MB_SETUP_ADMIN_FIRST_NAME=Meta
+      - MB_SETUP_ADMIN_LAST_NAME=Admin
+    ports:
+      - "3002:3000"
+    depends_on:
+      - db
+    labels:
+      - "service=metabase"
+      - "component=monitoring"
